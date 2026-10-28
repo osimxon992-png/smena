@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import DayPicker from '@/components/site/DayPicker';
 import HangingTags from '@/components/site/HangingTags';
+import QuickAsk from '@/components/site/QuickAsk';
 import ShiftTypes from '@/components/site/ShiftTypes';
 import Wipe from '@/components/site/Wipe';
 
@@ -31,7 +32,10 @@ export default function Home() {
       <ShiftTypes />
 
       <section className="section wrap" aria-labelledby="more-title">
-        <Wipe id="more-title">Batafsil o‘qing</Wipe>
+        <div className="section-head">
+          <Wipe id="more-title">Batafsil o‘qing</Wipe>
+          <QuickAsk />
+        </div>
         <div className="more-grid">
           {MORE.map(([href, title, text, tone]) => (
             <Link key={href} className={`more-sign stall-${tone}`} href={href}>

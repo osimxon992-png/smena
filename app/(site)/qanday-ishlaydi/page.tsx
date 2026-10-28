@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import InstallButton from '@/components/InstallButton';
 import NextSign from '@/components/site/NextSign';
+import PageHead from '@/components/site/PageHead';
+import RoleSwitch from '@/components/site/RoleSwitch';
 import StoryStamps from '@/components/site/StoryStamps';
 import Wipe from '@/components/site/Wipe';
 
@@ -12,10 +14,9 @@ export const metadata: Metadata = {
 export default function HowItWorks() {
   return (
     <>
-      <header className="page-head wrap">
-        <h1 className="page-title">Qanday ishlaydi</h1>
-        <p className="lead">Smenani tanlaysiz, ariza berasiz, qabul qilinsangiz borasiz. Har bir qadam quyida bitta yorliq misolida ko‘rsatilgan.</p>
-      </header>
+      <PageHead title="Qanday ishlaydi" lead="Smenani tanlaysiz, ariza berasiz, qabul qilinsangiz borasiz. Har bir qadam quyida bitta yorliq misolida ko‘rsatilgan.">
+        <RoleSwitch />
+      </PageHead>
 
       <section className="section story wrap" id="yol" aria-labelledby="story-title">
         <Wipe id="story-title">Arizadan bahogacha</Wipe>

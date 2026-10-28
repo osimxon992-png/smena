@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 import NextSign from '@/components/site/NextSign';
+import PageHead from '@/components/site/PageHead';
+import RuleCheck from '@/components/site/RuleCheck';
 
 export const metadata: Metadata = {
   title: 'Qoidalar',
@@ -16,10 +18,9 @@ const RULES = [
 export default function Rules() {
   return (
     <>
-      <header className="page-head wrap">
-        <h1 className="page-title">Qoidalar</h1>
-        <p className="lead">Qoidalar oz va hammaga bir xil. Ular biznesga odam kelishini, ishchiga esa aytilgan haqni kafolatlash uchun.</p>
-      </header>
+      <PageHead title="Qoidalar" lead="Qoidalar oz va hammaga bir xil. Ular biznesga odam kelishini, ishchiga esa aytilgan haqni kafolatlash uchun.">
+        <RuleCheck />
+      </PageHead>
 
       <section className="section rules" aria-labelledby="rules-title">
         <div className="wrap rules-grid">

@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import Calculator from '@/components/site/Calculator';
 import NextSign from '@/components/site/NextSign';
+import PageHead from '@/components/site/PageHead';
+import QuickPost from '@/components/site/QuickPost';
 import Wipe from '@/components/site/Wipe';
 
 export const metadata: Metadata = {
@@ -12,10 +14,9 @@ export const metadata: Metadata = {
 export default function Business() {
   return (
     <>
-      <header className="page-head wrap">
-        <h1 className="page-title">Bizneslar uchun</h1>
-        <p className="lead">To‘yxona, restoran, ombor yoki topshirish punkti: bir kunga qo‘shimcha odam kerak bo‘lsa, shu yerda e’lon qiling.</p>
-      </header>
+      <PageHead title="Bizneslar uchun" lead="To‘yxona, restoran, ombor yoki topshirish punkti: bir kunga qo‘shimcha odam kerak bo‘lsa, shu yerda e’lon qiling.">
+        <QuickPost />
+      </PageHead>
 
       <section className="section wrap" id="hisob" aria-labelledby="biz-title">
         <div className="biz-grid">
