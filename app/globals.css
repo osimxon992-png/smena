@@ -110,7 +110,8 @@ img, svg { display: block; }
 .twine { position: absolute; left: 0; right: 0; top: 0; width: 100%; height: 70px; overflow: visible; }
 .twine path { fill: none; stroke: var(--twine); stroke-width: 3; vector-effect: non-scaling-stroke; }
 .tags { list-style: none; margin: 0; padding: 0; }
-.hang { --swing: 0deg; transform-origin: 50% 0; filter: drop-shadow(0 16px 16px rgba(50, 28, 6, .4)); }
+/* will-change: tebranish faqat kompozitorda aylanadi, soyali yorliq har kadrda qayta chizilmaydi */
+.hang { --swing: 0deg; transform-origin: 50% 0; filter: drop-shadow(0 16px 16px rgba(50, 28, 6, .4)); will-change: transform; }
 .hang::before { content: ''; display: block; width: 2px; height: var(--len, 34px); margin: 0 auto -6px; background: var(--twine); }
 .hang .tag { width: clamp(210px, 16.4vw, 246px); }
 @media (min-width: 1200px) {

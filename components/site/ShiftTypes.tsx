@@ -26,30 +26,44 @@ export default function ShiftTypes() {
     const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
     // Ko'rsatkich yo'lning qancha qismi o'tilganiga mutanosib: oxirgi peshtaxtalar ham o'z raqamini oladi
     const at = (done: number) => Math.round(done * (TYPES.length - 1));
+    let current = 0;
+    const show = (i: number) => { if (i !== current) setActive((current = i)); };
+
+    // O'lchamlar faqat layout() da o'qiladi: scroll paytida sahifa joylashuvini qayta hisoblatmaslik uchun
+    const geo = { pinned: false, top: 0, travel: 1, shift: 0, done: -1 };
     const move = () => {
-      if (!rows.classList.contains('pinned')) return;
-      const done = Math.min(1, Math.max(0, (scrollY - rows.offsetTop) / (rows.offsetHeight - innerHeight)));
-      strip.style.transform = `translateX(${-done * (strip.scrollWidth - innerWidth)}px)`;
-      setActive(at(done));
+      if (!geo.pinned) return;
+      const done = Math.min(1, Math.max(0, (scrollY - geo.top) / geo.travel));
+      if (done === geo.done) return;
+      geo.done = done;
+      strip.style.transform = `translateX(${-done * geo.shift}px)`;
+      show(at(done));
     };
-    const onStrip = () => setActive(at(strip.scrollLeft / Math.max(1, strip.scrollWidth - strip.clientWidth)));
+    const onStrip = () => show(at(strip.scrollLeft / Math.max(1, strip.scrollWidth - strip.clientWidth)));
     const layout = () => {
-      const on = wide.matches && !calm;
-      rows.classList.toggle('pinned', on);
-      rows.style.height = on ? `${strip.scrollWidth - innerWidth + innerHeight}px` : '';
+      geo.pinned = wide.matches && !calm;
+      rows.classList.toggle('pinned', geo.pinned);
+      const height = geo.pinned ? `${strip.scrollWidth - innerWidth + innerHeight}px` : '';
+      if (rows.style.height !== height) rows.style.height = height;
+      geo.top = rows.getBoundingClientRect().top + scrollY;
+      geo.travel = Math.max(1, rows.offsetHeight - innerHeight);
+      geo.shift = strip.scrollWidth - innerWidth;
+      geo.done = -1;
       strip.style.transform = '';
       move();
     };
     layout();
     document.fonts?.ready.then(layout);
+    // Yuqoridagi bloklar balandligi o'zgarsa (shrift, jonli smenalar), boshlanish nuqtasi ham yangilanadi
+    const resized = new ResizeObserver(layout);
+    resized.observe(document.body);
     addEventListener('scroll', move, { passive: true });
     strip.addEventListener('scroll', onStrip, { passive: true });
-    addEventListener('resize', layout);
     wide.addEventListener('change', layout);
     return () => {
+      resized.disconnect();
       removeEventListener('scroll', move);
       strip.removeEventListener('scroll', onStrip);
-      removeEventListener('resize', layout);
       wide.removeEventListener('change', layout);
     };
   }, []);

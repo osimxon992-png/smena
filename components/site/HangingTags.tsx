@@ -36,23 +36,38 @@ export default function HangingTags() {
     });
   }, []);
 
-  // Yorliqlar aylantirish tezligiga qarab tebranadi (so'nuvchi prujina)
+  // Yorliqlar aylantirish tezligiga qarab tebranadi (so'nuvchi prujina).
+  // Faqat ip ekranda ko'rinayotganda ishlaydi; boshqa paytda har kadrda uslub yozib, sahifani sekinlatmaydi.
   useEffect(() => {
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    let angle = 0, speed = 0, lastY = scrollY, frame = 0;
+    const ul = list.current!;
+    let angle = 0, speed = 0, lastY = scrollY, frame = 0, visible = true;
+    const paint = () => ul.querySelectorAll<HTMLElement>('.hang').forEach((h, i) => h.style.setProperty('--swing', `${(angle * (i % 2 ? 0.8 : 1.15)).toFixed(2)}deg`));
     const step = () => {
       speed = (speed - angle * 0.06) * 0.9;
-      angle += speed;
-      list.current?.querySelectorAll<HTMLElement>('.hang').forEach((h, i) => h.style.setProperty('--swing', `${(angle * (i % 2 ? 0.8 : 1.15)).toFixed(2)}deg`));
+      angle = Math.max(-8, Math.min(8, angle + speed));
+      paint();
       frame = Math.abs(angle) > 0.02 || Math.abs(speed) > 0.02 ? requestAnimationFrame(step) : 0;
     };
     const onScroll = () => {
-      speed += Math.max(-1.5, Math.min(1.5, (scrollY - lastY) * 0.03));
-      lastY = scrollY;
-      if (!frame) frame = requestAnimationFrame(step);
+      const y = scrollY;
+      if (visible) {
+        speed += Math.max(-1.5, Math.min(1.5, (y - lastY) * 0.03));
+        if (!frame) frame = requestAnimationFrame(step);
+      }
+      lastY = y;
     };
+    const seen = new IntersectionObserver(([e]) => {
+      visible = e.isIntersecting;
+      if (visible) return;
+      // Ekrandan chiqqanda tinchlantiramiz: qaytganda tik osilib turadi
+      cancelAnimationFrame(frame);
+      frame = 0; angle = 0; speed = 0;
+      paint();
+    });
+    seen.observe(ul);
     addEventListener('scroll', onScroll, { passive: true });
-    return () => { removeEventListener('scroll', onScroll); cancelAnimationFrame(frame); };
+    return () => { seen.disconnect(); removeEventListener('scroll', onScroll); cancelAnimationFrame(frame); };
   }, []);
 
   return (
