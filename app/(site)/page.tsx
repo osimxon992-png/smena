@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import DayPicker from '@/components/site/DayPicker';
 import HangingTags from '@/components/site/HangingTags';
 import ShiftTypes from '@/components/site/ShiftTypes';
 import Wipe from '@/components/site/Wipe';
@@ -43,11 +44,16 @@ export default function Home() {
       </section>
 
       <section className="section final wrap" aria-labelledby="final-title">
-        <h2 id="final-title" className="final-title">Ertaga bo‘shmisiz?</h2>
-        <p className="lead">Smenalar ro‘yxatini oching. Ro‘yxatdan o‘tish ikki daqiqa oladi.</p>
-        <div className="actions">
-          <Link className="btn btn-red btn-lg" href="/ilova/smenalar">Smenalarni ko‘rish</Link>
-          <Link className="btn btn-line btn-lg" href="/ilova/royxat?rol=biznes">Menga ishchi kerak</Link>
+        <div className="final-grid">
+          <div>
+            <h2 id="final-title" className="final-title">Ertaga bo‘shmisiz?</h2>
+            <p className="lead">Bo‘sh kuningizni tanlang va o‘sha kuni qanday smenalar borligini ko‘ring. Ro‘yxatdan o‘tish ikki daqiqa oladi.</p>
+            <div className="actions">
+              <Link className="btn btn-red btn-lg" href="/ilova/smenalar">Smenalarni ko‘rish</Link>
+              <Link className="btn btn-line btn-lg" href="/ilova/royxat?rol=biznes">Menga ishchi kerak</Link>
+            </div>
+          </div>
+          <DayPicker />
         </div>
       </section>
     </>
