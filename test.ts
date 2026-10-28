@@ -97,6 +97,21 @@ assert.equal(await status('adm', `/admin/users/${blockedId}`, { blocked: false }
 assert.equal((await call('w', '/me')).data.blocked, false, 'admin blokdan chiqardi');
 assert.equal(await status('adm', '/admin/users/9999', { blocked: true }), 404);
 assert.equal(await status('adm', `/admin/users/${blockedId}`, { blocked: 'ha' }), 400);
+const sardor = ov.users.find((u: any) => u.name === 'Sardor').id;
+const card = (await call('adm', `/admin/users/${sardor}`)).data;
+assert.equal(card.user.phone, '+998935556677');
+assert.equal(card.applications.length, 1, 'ishchining barcha arizalari');
+assert.ok(card.sessions.active >= 1 && card.sessions.last_login, 'kirish sessiyalari');
+assert.ok(!('pass' in card.user), 'parol xeshi ham tashqariga chiqmaydi');
+assert.equal((await call('adm', `/admin/shifts/${shift2}`)).data.applicants.length, 2);
+assert.equal(await status('w', `/admin/users/${sardor}`), 401, 'oddiy foydalanuvchi ko‘ra olmaydi');
+const temp = (await call('adm', `/admin/users/${sardor}/password`, {})).data.password;
+assert.equal((await call('w2', '/me')).data, null, 'parol tiklanganda eski kirishlar yopiladi');
+assert.equal(await status('w2', '/login', { phone: '935556677', password: 'secret1' }), 401, 'eski parol ishlamaydi');
+assert.equal(await status('w2', '/login', { phone: '935556677', password: temp }), 200, 'vaqtinchalik parol ishlaydi');
+assert.equal((await call('adm', `/admin/users/${sardor}/logout`, {})).data.ended, 1);
+assert.equal((await call('w2', '/me')).data, null, 'admin sessiyani yopdi');
+await status('w2', '/login', { phone: '935556677', password: temp });
 assert.equal(await status('adm', '/admin/logout', {}), 200);
 assert.equal(await status('adm', '/admin/overview'), 401, 'chiqqandan keyin yopiq');
 

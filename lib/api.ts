@@ -406,7 +406,7 @@ async function adminOverview(ctx: Ctx) {
     ),
     all(
       `SELECT a.id, a.status, a.worker_rating, a.business_rating, a.created_at,
-         w.id worker_id, w.name worker, w.phone worker_phone, s.title, s.date, s.start_time, s.pay, b.org
+         w.id worker_id, w.name worker, w.phone worker_phone, s.id shift_id, s.title, s.date, s.start_time, s.pay, b.org
        FROM applications a JOIN users w ON w.id = a.worker_id JOIN shifts s ON s.id = a.shift_id JOIN users b ON b.id = s.business_id
        ORDER BY a.id DESC LIMIT 500`,
     ),
@@ -423,7 +423,61 @@ async function adminSetBlocked(ctx: Ctx) {
   return { ok: true };
 }
 
+// Bitta foydalanuvchi haqida hammasi: profil, arizalari yoki smenalari, kirish sessiyalari.
+// Parol ko'rsatilmaydi: bazada faqat scrypt xeshi turadi, asl parolni hech kim (admin ham) bila olmaydi.
+async function adminUser(ctx: Ctx) {
+  needAdmin(ctx);
+  const u = await one('SELECT id, role, name, org, phone, blocked, created_at FROM users WHERE id = ?', ctx.id) || fail(404, 'Foydalanuvchi topilmadi');
+  const [stats, sessions, applications, shifts] = await Promise.all([
+    profile(u),
+    one("SELECT COUNT(*) active, MAX(created_at) last_login FROM sessions WHERE user_id = ? AND created_at > datetime('now', '-30 days')", ctx.id),
+    all(
+      `SELECT a.id, a.status, a.worker_rating, a.business_rating, a.created_at, s.id shift_id, s.title, s.date, s.start_time, s.end_time, s.pay, b.org, b.phone org_phone
+       FROM applications a JOIN shifts s ON s.id = a.shift_id JOIN users b ON b.id = s.business_id
+       WHERE a.worker_id = ? ORDER BY s.date DESC, s.start_time DESC`, ctx.id),
+    all(
+      `SELECT s.id, s.title, s.place, s.date, s.start_time, s.end_time, s.pay, s.slots, s.note, ${TAKEN} taken,
+         (SELECT COUNT(*) FROM applications x WHERE x.shift_id = s.id AND x.status = 'pending') pending,
+         (SELECT COUNT(*) FROM applications x WHERE x.shift_id = s.id AND x.status = 'came') came
+       FROM shifts s WHERE s.business_id = ? ORDER BY s.date DESC, s.start_time DESC`, ctx.id),
+  ]);
+  return { user: { ...u, ...stats }, sessions, applications, shifts };
+}
+
+// Bitta smena: barcha arizachilar telefoni bilan
+async function adminShift(ctx: Ctx) {
+  needAdmin(ctx);
+  const shift = await one(`SELECT s.*, u.org, u.phone org_phone, u.id org_id, ${TAKEN} taken FROM shifts s JOIN users u ON u.id = s.business_id WHERE s.id = ?`, ctx.id)
+    || fail(404, 'Smena topilmadi');
+  const applicants = await all(
+    `SELECT a.id, a.status, a.worker_rating, a.business_rating, a.created_at, u.id worker_id, u.name, u.phone, u.blocked
+     FROM applications a JOIN users u ON u.id = a.worker_id WHERE a.shift_id = ? ORDER BY a.id`, ctx.id);
+  return { shift, applicants };
+}
+
+// Parolni unutgan foydalanuvchi uchun: yangi vaqtinchalik parol bir marta ko'rsatiladi, eski kirishlar yopiladi
+async function adminResetPassword(ctx: Ctx) {
+  needAdmin(ctx);
+  const password = crypto.randomBytes(6).toString('base64url');
+  const [changed] = await db.batch([
+    { sql: 'UPDATE users SET pass = ? WHERE id = ?', args: [hash(password), ctx.id] },
+    { sql: 'DELETE FROM sessions WHERE user_id = ?', args: [ctx.id] },
+  ], 'write');
+  if (!changed.rowsAffected) fail(404, 'Foydalanuvchi topilmadi');
+  return { password };
+}
+
+async function adminEndSessions(ctx: Ctx) {
+  needAdmin(ctx);
+  const { rowsAffected } = await exec('DELETE FROM sessions WHERE user_id = ?', ctx.id);
+  return { ended: rowsAffected };
+}
+
 const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
+  ['GET', /^\/api\/admin\/users\/(\d+)$/, adminUser],
+  ['POST', /^\/api\/admin\/users\/(\d+)\/password$/, adminResetPassword],
+  ['POST', /^\/api\/admin\/users\/(\d+)\/logout$/, adminEndSessions],
+  ['GET', /^\/api\/admin\/shifts\/(\d+)$/, adminShift],
   ['POST', /^\/api\/admin\/login$/, adminLogin],
   ['POST', /^\/api\/admin\/logout$/, adminLogout],
   ['GET', /^\/api\/admin\/me$/, (ctx) => ({ enabled: !!process.env.ADMIN_PASSWORD, admin: isAdmin(ctx.cookieHeader) })],

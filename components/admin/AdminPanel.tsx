@@ -3,11 +3,12 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { api, day, som, STATUS, type Status } from '@/lib/client';
+import Detail, { type Target } from './Detail';
 
 type Stats = { workers: number; businesses: number; blocked: number; shifts: number; open_shifts: number; applications: number; pending: number; came: number; noshow: number; paid: number; commission: number };
 type User = { id: number; role: 'worker' | 'business'; name: string; org: string | null; phone: string; blocked: number; created_at: string; rating: number | null; done: number; noshows: number; shifts: number };
 type ShiftRow = { id: number; title: string; place: string; date: string; start_time: string; end_time: string; pay: number; slots: number; org: string; phone: string; taken: number; pending: number; came: number; noshow: number; is_open: number };
-type AppRow = { id: number; status: Status; worker_rating: number | null; business_rating: number | null; created_at: string; worker_id: number; worker: string; worker_phone: string; title: string; date: string; start_time: string; pay: number; org: string };
+type AppRow = { id: number; shift_id: number; status: Status; worker_rating: number | null; business_rating: number | null; created_at: string; worker_id: number; worker: string; worker_phone: string; title: string; date: string; start_time: string; pay: number; org: string };
 type Overview = { stats: Stats; users: User[]; shifts: ShiftRow[]; applications: AppRow[] };
 
 const TABS = [['umumiy', 'Umumiy'], ['users', 'Foydalanuvchilar'], ['shifts', 'Smenalar'], ['apps', 'Arizalar']] as const;
@@ -53,6 +54,8 @@ export default function AdminPanel() {
   const [role, setRole] = useState<'all' | 'worker' | 'business' | 'blocked'>('all');
   const [when, setWhen] = useState<'all' | 'open' | 'past'>('all');
   const [status, setStatus] = useState<'all' | Status>('all');
+  const [detail, setDetail] = useState<Target | null>(null);
+  const closeDetail = useCallback(() => setDetail(null), []);
 
   const load = useCallback(async () => {
     try {
@@ -143,7 +146,7 @@ export default function AdminPanel() {
                   <div className="stat money"><strong>{som(s.commission)}</strong><span>Komissiya, 15% ({som(s.paid)} ish haqidan)</span></div>
                 </div>
                 <h2 className="admin-h2">Oxirgi arizalar</h2>
-                <AppsTable rows={data.applications.slice(0, 8)} />
+                <AppsTable rows={data.applications.slice(0, 8)} onOpen={setDetail} />
                 <button type="button" className="link" onClick={() => setTab('apps')}>Barcha arizalar ({data.applications.length})</button>
               </>
             )}
@@ -163,7 +166,7 @@ export default function AdminPanel() {
                       {users.map((u) => (
                         <tr key={u.id}>
                           <td className="num">{u.id}</td>
-                          <td><strong>{u.name}</strong>{u.org && <small>{u.org}</small>}</td>
+                          <td><button type="button" className="cell-link" onClick={() => setDetail({ kind: 'user', id: u.id })}>{u.name}</button>{u.org && <small>{u.org}</small>}</td>
                           <td>{u.role === 'worker' ? 'Ishchi' : 'Biznes'}</td>
                           <td><a href={`tel:${u.phone}`}>{u.phone}</a></td>
                           <td className="num">{u.rating ? `★ ${u.rating}` : '—'}</td>
@@ -202,7 +205,7 @@ export default function AdminPanel() {
                           <td className="num">{x.id}</td>
                           <td>{day(x.date, false)}</td>
                           <td className="num">{x.start_time}–{x.end_time}</td>
-                          <td><strong>{x.title}</strong></td>
+                          <td><button type="button" className="cell-link" onClick={() => setDetail({ kind: 'shift', id: x.id })}>{x.title}</button></td>
                           <td>{x.org}<small><a href={`tel:${x.phone}`}>{x.phone}</a></small></td>
                           <td>{x.place}</td>
                           <td className="num">{som(x.pay)}</td>
@@ -228,17 +231,18 @@ export default function AdminPanel() {
                   <Pick label="Holati" value={status} onPick={setStatus} options={[['all', 'Hammasi'], ...(Object.entries(STATUS) as [Status, string][])]} />
                   <span className="count">{apps.length} ta</span>
                 </div>
-                <AppsTable rows={apps} />
+                <AppsTable rows={apps} onOpen={setDetail} />
               </>
             )}
           </main>
         )}
       </div>
+      {detail && <Detail target={detail} onOpen={setDetail} onClose={closeDetail} onChanged={load} />}
     </div>
   );
 }
 
-function AppsTable({ rows }: { rows: AppRow[] }) {
+function AppsTable({ rows, onOpen }: { rows: AppRow[]; onOpen: (t: Target) => void }) {
   return (
     <div className="table-wrap">
       <table className="admin-table">
@@ -247,8 +251,8 @@ function AppsTable({ rows }: { rows: AppRow[] }) {
           {rows.map((a) => (
             <tr key={a.id}>
               <td className="num">{a.id}</td>
-              <td><strong>{a.worker}</strong><small><a href={`tel:${a.worker_phone}`}>{a.worker_phone}</a></small></td>
-              <td>{a.title}</td>
+              <td><button type="button" className="cell-link" onClick={() => onOpen({ kind: 'user', id: a.worker_id })}>{a.worker}</button><small><a href={`tel:${a.worker_phone}`}>{a.worker_phone}</a></small></td>
+              <td><button type="button" className="cell-link" onClick={() => onOpen({ kind: 'shift', id: a.shift_id })}>{a.title}</button></td>
               <td>{a.org}</td>
               <td>{day(a.date, false)}, {a.start_time}</td>
               <td className="num">{som(a.pay)}</td>
