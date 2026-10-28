@@ -588,3 +588,19 @@ html.lenis, html.lenis body { height: auto; }
   .side-foot > span, .side-foot a.side-link { display: none; }
   .side-foot { flex: 1 1 auto; justify-content: flex-end; }
 }
+
+/* Admin: guruhlangan yon menyu va bo'lim sarlavhasi */
+.side-nav { overflow-y: auto; min-height: 0; flex: 1 1 auto; scrollbar-width: thin; scrollbar-color: var(--kraft-deep) transparent; }
+.side-group { display: grid; gap: 2px; margin-bottom: 12px; }
+.side-group-title { margin: 0 0 4px; padding: 0 12px; color: var(--kraft); font-size: .78rem; font-weight: 700; }
+.side-nav button { padding: 8px 12px; font-size: .95rem; }
+.admin-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; margin-bottom: 18px; }
+.admin-head h1 { margin: 0; }
+button.stat { border: 0; color: var(--ink); text-align: left; font: inherit; cursor: pointer; transition: transform .15s ease; }
+button.stat:hover { transform: translateY(-2px); }
+.table-count { margin: 0; padding: 10px 14px; border-top: 1px dashed var(--paper-shade); color: var(--paper-ink); font-size: .85rem; font-weight: 600; }
+@media (max-width: 899px) {
+  .side-nav { overflow-y: visible; }
+  .side-group { display: contents; }
+  .side-group-title { display: none; }
+}

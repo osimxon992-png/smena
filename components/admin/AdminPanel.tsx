@@ -2,31 +2,36 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { api, day, som, STATUS, type Status } from '@/lib/client';
+import { api, day, som, STATUS, tashkentDate, type Status } from '@/lib/client';
 import Detail, { type Target } from './Detail';
 
 type Stats = { workers: number; businesses: number; blocked: number; shifts: number; open_shifts: number; applications: number; pending: number; came: number; noshow: number; paid: number; commission: number };
 type User = { id: number; role: 'worker' | 'business'; name: string; org: string | null; phone: string; blocked: number; created_at: string; rating: number | null; done: number; noshows: number; shifts: number };
-type ShiftRow = { id: number; title: string; place: string; date: string; start_time: string; end_time: string; pay: number; slots: number; org: string; phone: string; taken: number; pending: number; came: number; noshow: number; is_open: number };
+type ShiftRow = { id: number; title: string; place: string; date: string; start_time: string; end_time: string; pay: number; slots: number; org_id: number; org: string; phone: string; taken: number; pending: number; came: number; noshow: number; is_open: number };
 type AppRow = { id: number; shift_id: number; status: Status; worker_rating: number | null; business_rating: number | null; created_at: string; worker_id: number; worker: string; worker_phone: string; title: string; date: string; start_time: string; pay: number; org: string };
-type Overview = { stats: Stats; users: User[]; shifts: ShiftRow[]; applications: AppRow[] };
+type Login = { created_at: string; user_id: number; name: string; role: 'worker' | 'business'; org: string | null; phone: string; active: number };
+type Overview = { stats: Stats; users: User[]; shifts: ShiftRow[]; applications: AppRow[]; sessions: Login[] };
+type Open = (t: Target) => void;
 
-const TABS = [['umumiy', 'Umumiy'], ['users', 'Foydalanuvchilar'], ['shifts', 'Smenalar'], ['apps', 'Arizalar']] as const;
-type Tab = (typeof TABS)[number][0];
+// Yon menyu: guruhlar va bo'limlar
+const GROUPS = [
+  ['Asosiy', [['umumiy', 'Umumiy holat'], ['bugun', 'Bugun']]],
+  ['Foydalanuvchilar', [['ishchilar', 'Ishchilar'], ['bizneslar', 'Bizneslar'], ['bloklangan', 'Bloklanganlar']]],
+  ['Smenalar', [['ochiq', 'Ochiq smenalar'], ['yopilgan', 'Yopilgan smenalar']]],
+  ['Arizalar', [['yangi', 'Yangi arizalar'], ['qabul', 'Qabul qilinganlar'], ['bajarilgan', 'Bajarilganlar'], ['kelmagan', 'Kelmaganlar'], ['arizalar', 'Barcha arizalar']]],
+  ['Hisobot', [['moliya', 'Moliya'], ['baholar', 'Baholar'], ['kirishlar', 'Kirishlar']]],
+] as const;
+type Tab = (typeof GROUPS)[number][1][number][0];
+const TITLES = Object.fromEntries(GROUPS.flatMap(([, items]) => items as readonly (readonly [Tab, string])[])) as Record<Tab, string>;
 const REFRESH_MS = 30_000;
 
 // Apostrof turlari farq qilmasin: "to'yxona" va "to‘yxona" bir xil topiladi
 const norm = (s: unknown) => String(s ?? '').toLowerCase().replace(/[‘’ʻʼ'`]/g, '');
 const matches = (q: string, ...fields: unknown[]) => !q || fields.some((f) => norm(f).includes(norm(q)));
 const clock = (d: Date) => d.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-function Pick<T extends string>({ value, options, onPick, label }: { value: T; options: readonly (readonly [T, string])[]; onPick: (v: T) => void; label: string }) {
-  return (
-    <div className="pick-row" role="group" aria-label={label}>
-      {options.map(([v, text]) => <button key={v} type="button" className="pick" aria-pressed={v === value} onClick={() => onPick(v)}>{text}</button>)}
-    </div>
-  );
-}
+const stars = (n: number | null) => (n ? `★ ${n}` : '—');
+const Tel = ({ phone }: { phone: string }) => <a href={`tel:${phone}`}>{phone}</a>;
+const Name = ({ text, onClick }: { text: string; onClick: () => void }) => <button type="button" className="cell-link" onClick={onClick}>{text}</button>;
 
 function Login({ onDone }: { onDone: () => void }) {
   const [error, setError] = useState('');
@@ -44,6 +49,82 @@ function Login({ onDone }: { onDone: () => void }) {
   );
 }
 
+function Table({ head, empty, children, count }: { head: React.ReactNode; empty: string; children: React.ReactNode[]; count?: boolean }) {
+  return (
+    <div className="table-wrap">
+      <table className="admin-table"><thead><tr>{head}</tr></thead><tbody>{children}</tbody></table>
+      {!children.length && <p className="table-empty">{empty}</p>}
+      {count !== false && children.length > 0 && <p className="table-count">{children.length} ta</p>}
+    </div>
+  );
+}
+
+function UsersTable({ rows, onOpen, onBlock }: { rows: User[]; onOpen: Open; onBlock: (u: User, blocked: boolean) => void }) {
+  return (
+    <Table empty="Bu bo‘limda foydalanuvchi yo‘q." head={<><th>#</th><th>Ism</th><th>Telefon</th><th className="num">Reyting</th><th className="num">Bajargan</th><th className="num">Kelmagan</th><th className="num">Smenalari</th><th>Qo‘shilgan</th><th>Amal</th></>}>
+      {rows.map((u) => (
+        <tr key={u.id}>
+          <td className="num">{u.id}</td>
+          <td><Name text={u.name} onClick={() => onOpen({ kind: 'user', id: u.id })} />{u.org && <small>{u.org}</small>}</td>
+          <td><Tel phone={u.phone} /></td>
+          <td className="num">{stars(u.rating)}</td>
+          <td className="num">{u.role === 'worker' ? u.done : '—'}</td>
+          <td className="num">{u.role === 'worker' ? u.noshows : '—'}</td>
+          <td className="num">{u.role === 'business' ? u.shifts : '—'}</td>
+          <td>{u.created_at.slice(0, 10)}</td>
+          <td>
+            {u.blocked
+              ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => onBlock(u, false)}>Blokdan chiqarish</button>
+              : <button type="button" className="btn btn-danger btn-sm" onClick={() => onBlock(u, true)}>Bloklash</button>}
+          </td>
+        </tr>
+      ))}
+    </Table>
+  );
+}
+
+function ShiftsTable({ rows, onOpen }: { rows: ShiftRow[]; onOpen: Open }) {
+  return (
+    <Table empty="Bu bo‘limda smena yo‘q." head={<><th>#</th><th>Sana</th><th>Vaqt</th><th>Lavozim</th><th>Biznes</th><th>Manzil</th><th className="num">Haq</th><th className="num">Joy</th><th className="num">Kutmoqda</th><th className="num">Keldi</th><th className="num">Kelmadi</th></>}>
+      {rows.map((x) => (
+        <tr key={x.id}>
+          <td className="num">{x.id}</td>
+          <td>{day(x.date, false)}</td>
+          <td className="num">{x.start_time}–{x.end_time}</td>
+          <td><Name text={x.title} onClick={() => onOpen({ kind: 'shift', id: x.id })} /></td>
+          <td><Name text={x.org} onClick={() => onOpen({ kind: 'user', id: x.org_id })} /><small><Tel phone={x.phone} /></small></td>
+          <td>{x.place}</td>
+          <td className="num">{som(x.pay)}</td>
+          <td className="num">{x.taken}/{x.slots}</td>
+          <td className="num">{x.pending}</td>
+          <td className="num">{x.came}</td>
+          <td className="num">{x.noshow}</td>
+        </tr>
+      ))}
+    </Table>
+  );
+}
+
+function AppsTable({ rows, onOpen, count }: { rows: AppRow[]; onOpen: Open; count?: boolean }) {
+  return (
+    <Table count={count} empty="Bu bo‘limda ariza yo‘q." head={<><th>#</th><th>Ishchi</th><th>Smena</th><th>Biznes</th><th>Sana</th><th className="num">Haq</th><th>Holat</th><th className="num">Ishchiga baho</th><th className="num">Biznesga baho</th></>}>
+      {rows.map((a) => (
+        <tr key={a.id}>
+          <td className="num">{a.id}</td>
+          <td><Name text={a.worker} onClick={() => onOpen({ kind: 'user', id: a.worker_id })} /><small><Tel phone={a.worker_phone} /></small></td>
+          <td><Name text={a.title} onClick={() => onOpen({ kind: 'shift', id: a.shift_id })} /></td>
+          <td>{a.org}</td>
+          <td>{day(a.date, false)}, {a.start_time}</td>
+          <td className="num">{som(a.pay)}</td>
+          <td><span className={`chip chip-${a.status}`}>{STATUS[a.status]}</span></td>
+          <td className="num">{stars(a.worker_rating)}</td>
+          <td className="num">{stars(a.business_rating)}</td>
+        </tr>
+      ))}
+    </Table>
+  );
+}
+
 export default function AdminPanel() {
   const [access, setAccess] = useState<{ enabled: boolean; admin: boolean } | null>(null);
   const [data, setData] = useState<Overview | null>(null);
@@ -51,9 +132,6 @@ export default function AdminPanel() {
   const [updated, setUpdated] = useState<Date | null>(null);
   const [tab, setTab] = useState<Tab>('umumiy');
   const [q, setQ] = useState('');
-  const [role, setRole] = useState<'all' | 'worker' | 'business' | 'blocked'>('all');
-  const [when, setWhen] = useState<'all' | 'open' | 'past'>('all');
-  const [status, setStatus] = useState<'all' | Status>('all');
   const [detail, setDetail] = useState<Target | null>(null);
   const closeDetail = useCallback(() => setDetail(null), []);
 
@@ -107,23 +185,55 @@ export default function AdminPanel() {
   }
   if (!access.admin) return <div className="admin"><div className="wrap">{head}<h1>Admin paneliga kirish</h1><Login onDone={check} /></div></div>;
 
+  const today = tashkentDate();
   const s = data?.stats;
-  const users = (data?.users ?? []).filter((u) => (role === 'all' || (role === 'blocked' ? u.blocked : u.role === role)) && matches(q, u.name, u.org, u.phone));
-  const shifts = (data?.shifts ?? []).filter((x) => (when === 'all' || (when === 'open') === !!x.is_open) && matches(q, x.title, x.org, x.place, x.phone));
-  const apps = (data?.applications ?? []).filter((a) => (status === 'all' || a.status === status) && matches(q, a.worker, a.worker_phone, a.title, a.org));
-  const search = <input className="search-input admin-search" type="search" placeholder="Ism, telefon, lavozim yoki biznes" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Qidirish" />;
+  const users = (data?.users ?? []).filter((u) => matches(q, u.name, u.org, u.phone));
+  const shifts = (data?.shifts ?? []).filter((x) => matches(q, x.title, x.org, x.place, x.phone));
+  const apps = (data?.applications ?? []).filter((a) => matches(q, a.worker, a.worker_phone, a.title, a.org));
+  const logins = (data?.sessions ?? []).filter((l) => matches(q, l.name, l.org, l.phone));
+  const byStatus = (st: Status) => apps.filter((a) => a.status === st);
+  const rated = apps.filter((a) => a.worker_rating || a.business_rating);
 
-  // Yon menyu: bo'limlar soni bilan, pastida yangilanish vaqti va chiqish
-  const counts: Record<Tab, number | null> = { umumiy: null, users: data?.users.length ?? null, shifts: s?.open_shifts ?? null, apps: s?.pending ?? null };
+  // Moliya: har bir biznes bo'yicha bajarilgan smenalar, ish haqi va 15% komissiya
+  const finance = Object.values(shifts.reduce<Record<number, { id: number; org: string; phone: string; shifts: number; came: number; paid: number }>>((acc, x) => {
+    const row = (acc[x.org_id] ??= { id: x.org_id, org: x.org, phone: x.phone, shifts: 0, came: 0, paid: 0 });
+    row.shifts += 1;
+    row.came += x.came;
+    row.paid += x.came * x.pay;
+    return acc;
+  }, {})).sort((a, b) => b.paid - a.paid);
+
+  const lists = {
+    umumiy: null, moliya: finance, baholar: rated, kirishlar: logins,
+    bugun: shifts.filter((x) => x.date === today),
+    ishchilar: users.filter((u) => u.role === 'worker'),
+    bizneslar: users.filter((u) => u.role === 'business'),
+    bloklangan: users.filter((u) => u.blocked),
+    ochiq: shifts.filter((x) => x.is_open),
+    yopilgan: shifts.filter((x) => !x.is_open),
+    yangi: byStatus('pending'), qabul: byStatus('accepted'), bajarilgan: byStatus('came'), kelmagan: byStatus('noshow'),
+    arizalar: apps,
+  } satisfies Record<Tab, unknown[] | null>;
+  // Diqqat talab qiladigan bo'limlar sonini qizil ko'rsatamiz
+  const hot: Partial<Record<Tab, boolean>> = { yangi: true, kelmagan: true, bloklangan: true };
+
   const side = (
-    <aside className="admin-side">
+    <aside className="admin-side" data-lenis-prevent>
       <div className="side-brand"><Link className="logo" href="/">Smena</Link><span className="admin-badge">Admin</span></div>
       <nav className="side-nav" aria-label="Admin bo‘limlari">
-        {TABS.map(([k, label]) => (
-          <button key={k} type="button" aria-current={tab === k ? 'page' : undefined} onClick={() => setTab(k)}>
-            <span>{label}</span>
-            {counts[k] != null && <small className={k === 'apps' && counts[k] ? 'hot' : ''} title={k === 'shifts' ? 'Ochiq smenalar' : k === 'apps' ? 'Javob kutayotganlar' : undefined}>{counts[k]}</small>}
-          </button>
+        {GROUPS.map(([group, items]) => (
+          <div key={group} className="side-group">
+            <p className="side-group-title">{group}</p>
+            {items.map(([k, label]) => {
+              const n = lists[k]?.length;
+              return (
+                <button key={k} type="button" aria-current={tab === k ? 'page' : undefined} onClick={() => setTab(k)}>
+                  <span>{label}</span>
+                  {n != null && <small className={hot[k] && n ? 'hot' : ''}>{n}</small>}
+                </button>
+              );
+            })}
+          </div>
         ))}
       </nav>
       <div className="side-foot">
@@ -135,145 +245,90 @@ export default function AdminPanel() {
     </aside>
   );
 
+  let view: React.ReactNode = null;
+  if (data && s) {
+    switch (tab) {
+      case 'umumiy':
+        view = (
+          <>
+            <div className="stat-grid">
+              {([
+                ['ishchilar', s.workers, 'Ishchilar'], ['bizneslar', s.businesses, 'Bizneslar'],
+                ['ochiq', s.open_shifts, `Ochiq smenalar (${s.shifts} jami)`], ['yangi', s.pending, 'Javob kutayotgan arizalar'],
+                ['bajarilgan', s.came, 'Bajarilgan smenalar'], ['kelmagan', s.noshow, 'Kelmaganlar'],
+                ['bloklangan', s.blocked, 'Bloklanganlar'],
+              ] as [Tab, number, string][]).map(([k, n, label]) => (
+                <button key={k} type="button" className={`stat${hot[k] && n ? ' alert' : ''}`} onClick={() => setTab(k)}><strong>{n}</strong><span>{label}</span></button>
+              ))}
+              <button type="button" className="stat money" onClick={() => setTab('moliya')}><strong>{som(s.commission)}</strong><span>Komissiya, 15% ({som(s.paid)} ish haqidan)</span></button>
+            </div>
+            <h2 className="admin-h2">Oxirgi arizalar</h2>
+            <AppsTable rows={apps.slice(0, 8)} onOpen={setDetail} count={false} />
+          </>
+        );
+        break;
+      case 'bugun': view = <ShiftsTable rows={lists.bugun} onOpen={setDetail} />; break;
+      case 'ishchilar': case 'bizneslar': case 'bloklangan':
+        view = <UsersTable rows={lists[tab]} onOpen={setDetail} onBlock={setBlocked} />; break;
+      case 'ochiq': case 'yopilgan':
+        view = <ShiftsTable rows={lists[tab]} onOpen={setDetail} />; break;
+      case 'yangi': case 'qabul': case 'bajarilgan': case 'kelmagan': case 'arizalar': case 'baholar':
+        view = <AppsTable rows={lists[tab]} onOpen={setDetail} />; break;
+      case 'moliya':
+        view = (
+          <>
+            <div className="stat-grid">
+              <div className="stat money"><strong>{som(s.commission)}</strong><span>Jami komissiya, 15%</span></div>
+              <div className="stat"><strong>{som(s.paid)}</strong><span>Ishchilarga to‘langan haq</span></div>
+              <div className="stat"><strong>{s.came}</strong><span>Bajarilgan smenalar</span></div>
+              <div className="stat"><strong>{som(s.came ? Math.round(s.paid / s.came) : 0)}</strong><span>O‘rtacha smena haqi</span></div>
+            </div>
+            <h2 className="admin-h2">Bizneslar bo‘yicha</h2>
+            <Table empty="Hali bajarilgan smena yo‘q." head={<><th>Biznes</th><th>Telefon</th><th className="num">Smenalar</th><th className="num">Kelgan ishchilar</th><th className="num">Ish haqi</th><th className="num">Komissiya, 15%</th></>}>
+              {finance.map((f) => (
+                <tr key={f.id}>
+                  <td><Name text={f.org} onClick={() => setDetail({ kind: 'user', id: f.id })} /></td>
+                  <td><Tel phone={f.phone} /></td>
+                  <td className="num">{f.shifts}</td>
+                  <td className="num">{f.came}</td>
+                  <td className="num">{som(f.paid)}</td>
+                  <td className="num"><strong>{som(Math.round(f.paid * 0.15))}</strong></td>
+                </tr>
+              ))}
+            </Table>
+          </>
+        );
+        break;
+      case 'kirishlar':
+        view = (
+          <Table empty="Hali kirishlar yo‘q." head={<><th>Vaqt</th><th>Kim</th><th>Turi</th><th>Telefon</th><th>Holat</th></>}>
+            {logins.map((l, i) => (
+              <tr key={`${l.user_id}-${l.created_at}-${i}`}>
+                <td className="num">{l.created_at}</td>
+                <td><Name text={l.name} onClick={() => setDetail({ kind: 'user', id: l.user_id })} />{l.org && <small>{l.org}</small>}</td>
+                <td>{l.role === 'worker' ? 'Ishchi' : 'Biznes'}</td>
+                <td><Tel phone={l.phone} /></td>
+                <td>{l.active ? <span className="chip chip-accepted">Faol</span> : <span className="chip">Muddati o‘tgan</span>}</td>
+              </tr>
+            ))}
+          </Table>
+        );
+        break;
+    }
+  }
+
   return (
     <div className="admin admin-shell">
       {side}
       <div className="admin-main">
         {error && <p className="banner danger">{error}</p>}
-        {!data ? <p className="lead">Ma’lumotlar yuklanmoqda…</p> : (
-          <main id="asosiy">
-            {tab === 'umumiy' && s && (
-              <>
-                <h1>Umumiy holat</h1>
-                <div className="stat-grid">
-                  <div className="stat"><strong>{s.workers}</strong><span>Ishchilar</span></div>
-                  <div className="stat"><strong>{s.businesses}</strong><span>Bizneslar</span></div>
-                  <div className="stat"><strong>{s.open_shifts}</strong><span>Ochiq smenalar ({s.shifts} jami)</span></div>
-                  <div className="stat"><strong>{s.pending}</strong><span>Javob kutayotgan arizalar</span></div>
-                  <div className="stat"><strong>{s.came}</strong><span>Bajarilgan smenalar</span></div>
-                  <div className={`stat${s.noshow ? ' alert' : ''}`}><strong>{s.noshow}</strong><span>Kelmaganlar</span></div>
-                  <div className={`stat${s.blocked ? ' alert' : ''}`}><strong>{s.blocked}</strong><span>Bloklanganlar</span></div>
-                  <div className="stat money"><strong>{som(s.commission)}</strong><span>Komissiya, 15% ({som(s.paid)} ish haqidan)</span></div>
-                </div>
-                <h2 className="admin-h2">Oxirgi arizalar</h2>
-                <AppsTable rows={data.applications.slice(0, 8)} onOpen={setDetail} />
-                <button type="button" className="link" onClick={() => setTab('apps')}>Barcha arizalar ({data.applications.length})</button>
-              </>
-            )}
-
-            {tab === 'users' && (
-              <>
-                <h1>Foydalanuvchilar</h1>
-                <div className="toolbar">
-                  {search}
-                  <Pick label="Turi" value={role} onPick={setRole} options={[['all', 'Hammasi'], ['worker', 'Ishchilar'], ['business', 'Bizneslar'], ['blocked', 'Bloklanganlar']]} />
-                  <span className="count">{users.length} ta</span>
-                </div>
-                <div className="table-wrap">
-                  <table className="admin-table">
-                    <thead><tr><th>#</th><th>Ism</th><th>Turi</th><th>Telefon</th><th className="num">Reyting</th><th className="num">Bajargan</th><th className="num">Kelmagan</th><th className="num">Smenalari</th><th>Qo‘shilgan</th><th>Holat</th></tr></thead>
-                    <tbody>
-                      {users.map((u) => (
-                        <tr key={u.id}>
-                          <td className="num">{u.id}</td>
-                          <td><button type="button" className="cell-link" onClick={() => setDetail({ kind: 'user', id: u.id })}>{u.name}</button>{u.org && <small>{u.org}</small>}</td>
-                          <td>{u.role === 'worker' ? 'Ishchi' : 'Biznes'}</td>
-                          <td><a href={`tel:${u.phone}`}>{u.phone}</a></td>
-                          <td className="num">{u.rating ? `★ ${u.rating}` : '—'}</td>
-                          <td className="num">{u.role === 'worker' ? u.done : '—'}</td>
-                          <td className="num">{u.role === 'worker' ? u.noshows : '—'}</td>
-                          <td className="num">{u.role === 'business' ? u.shifts : '—'}</td>
-                          <td>{u.created_at.slice(0, 10)}</td>
-                          <td>
-                            {u.blocked
-                              ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => setBlocked(u, false)}>Blokdan chiqarish</button>
-                              : <button type="button" className="btn btn-danger btn-sm" onClick={() => setBlocked(u, true)}>Bloklash</button>}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {!users.length && <p className="table-empty">Bu filtr bo‘yicha foydalanuvchi yo‘q.</p>}
-                </div>
-              </>
-            )}
-
-            {tab === 'shifts' && (
-              <>
-                <h1>Smenalar</h1>
-                <div className="toolbar">
-                  {search}
-                  <Pick label="Vaqti" value={when} onPick={setWhen} options={[['all', 'Hammasi'], ['open', 'Ochiq'], ['past', 'Boshlangan yoki o‘tgan']]} />
-                  <span className="count">{shifts.length} ta</span>
-                </div>
-                <div className="table-wrap">
-                  <table className="admin-table">
-                    <thead><tr><th>#</th><th>Sana</th><th>Vaqt</th><th>Lavozim</th><th>Biznes</th><th>Manzil</th><th className="num">Haq</th><th className="num">Joy</th><th className="num">Kutmoqda</th><th className="num">Keldi</th><th className="num">Kelmadi</th><th>Holat</th></tr></thead>
-                    <tbody>
-                      {shifts.map((x) => (
-                        <tr key={x.id}>
-                          <td className="num">{x.id}</td>
-                          <td>{day(x.date, false)}</td>
-                          <td className="num">{x.start_time}–{x.end_time}</td>
-                          <td><button type="button" className="cell-link" onClick={() => setDetail({ kind: 'shift', id: x.id })}>{x.title}</button></td>
-                          <td>{x.org}<small><a href={`tel:${x.phone}`}>{x.phone}</a></small></td>
-                          <td>{x.place}</td>
-                          <td className="num">{som(x.pay)}</td>
-                          <td className="num">{x.taken}/{x.slots}</td>
-                          <td className="num">{x.pending}</td>
-                          <td className="num">{x.came}</td>
-                          <td className="num">{x.noshow}</td>
-                          <td><span className={`chip${x.is_open ? ' chip-accepted' : ''}`}>{x.is_open ? 'Ochiq' : 'Yopilgan'}</span></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {!shifts.length && <p className="table-empty">Bu filtr bo‘yicha smena yo‘q.</p>}
-                </div>
-              </>
-            )}
-
-            {tab === 'apps' && (
-              <>
-                <h1>Arizalar</h1>
-                <div className="toolbar">
-                  {search}
-                  <Pick label="Holati" value={status} onPick={setStatus} options={[['all', 'Hammasi'], ...(Object.entries(STATUS) as [Status, string][])]} />
-                  <span className="count">{apps.length} ta</span>
-                </div>
-                <AppsTable rows={apps} onOpen={setDetail} />
-              </>
-            )}
-          </main>
-        )}
+        <div className="admin-head">
+          <h1>{TITLES[tab]}</h1>
+          {tab !== 'umumiy' && <input className="search-input admin-search" type="search" placeholder="Ism, telefon, lavozim yoki biznes" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Qidirish" />}
+        </div>
+        {!data ? <p className="lead">Ma’lumotlar yuklanmoqda…</p> : <main id="asosiy">{view}</main>}
       </div>
       {detail && <Detail target={detail} onOpen={setDetail} onClose={closeDetail} onChanged={load} />}
-    </div>
-  );
-}
-
-function AppsTable({ rows, onOpen }: { rows: AppRow[]; onOpen: (t: Target) => void }) {
-  return (
-    <div className="table-wrap">
-      <table className="admin-table">
-        <thead><tr><th>#</th><th>Ishchi</th><th>Smena</th><th>Biznes</th><th>Sana</th><th className="num">Haq</th><th>Holat</th><th className="num">Ishchiga baho</th><th className="num">Biznesga baho</th></tr></thead>
-        <tbody>
-          {rows.map((a) => (
-            <tr key={a.id}>
-              <td className="num">{a.id}</td>
-              <td><button type="button" className="cell-link" onClick={() => onOpen({ kind: 'user', id: a.worker_id })}>{a.worker}</button><small><a href={`tel:${a.worker_phone}`}>{a.worker_phone}</a></small></td>
-              <td><button type="button" className="cell-link" onClick={() => onOpen({ kind: 'shift', id: a.shift_id })}>{a.title}</button></td>
-              <td>{a.org}</td>
-              <td>{day(a.date, false)}, {a.start_time}</td>
-              <td className="num">{som(a.pay)}</td>
-              <td><span className={`chip chip-${a.status}`}>{STATUS[a.status]}</span></td>
-              <td className="num">{a.worker_rating ? `★ ${a.worker_rating}` : '—'}</td>
-              <td className="num">{a.business_rating ? `★ ${a.business_rating}` : '—'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {!rows.length && <p className="table-empty">Hali ariza yo‘q.</p>}
     </div>
   );
 }

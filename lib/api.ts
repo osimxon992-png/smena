@@ -369,7 +369,7 @@ function adminLogout(ctx: Ctx) {
 // shortcut: har ro'yxatdan oxirgi 500 tasi; ma'lumot ko'payganda sahifalash qo'shing
 async function adminOverview(ctx: Ctx) {
   needAdmin(ctx);
-  const [stats, users, shifts, applications] = await Promise.all([
+  const [stats, users, shifts, applications, sessions] = await Promise.all([
     one(
       `SELECT
          (SELECT COUNT(*) FROM users WHERE role = 'worker') workers,
@@ -395,7 +395,7 @@ async function adminOverview(ctx: Ctx) {
        FROM users u ORDER BY u.id DESC LIMIT 500`,
     ),
     all(
-      `SELECT s.id, s.title, s.place, s.date, s.start_time, s.end_time, s.pay, s.slots, s.created_at, u.org, u.phone,
+      `SELECT s.id, s.title, s.place, s.date, s.start_time, s.end_time, s.pay, s.slots, s.created_at, u.id org_id, u.org, u.phone,
          ${TAKEN} taken,
          (SELECT COUNT(*) FROM applications x WHERE x.shift_id = s.id AND x.status = 'pending') pending,
          (SELECT COUNT(*) FROM applications x WHERE x.shift_id = s.id AND x.status = 'came') came,
@@ -410,8 +410,14 @@ async function adminOverview(ctx: Ctx) {
        FROM applications a JOIN users w ON w.id = a.worker_id JOIN shifts s ON s.id = a.shift_id JOIN users b ON b.id = s.business_id
        ORDER BY a.id DESC LIMIT 500`,
     ),
+    // Kirishlar tarixi: tokenning o'zi hech qachon chiqarilmaydi
+    all(
+      `SELECT s.created_at, u.id user_id, u.name, u.role, u.org, u.phone,
+         CASE WHEN s.created_at > datetime('now', '-30 days') THEN 1 ELSE 0 END active
+       FROM sessions s JOIN users u ON u.id = s.user_id ORDER BY s.created_at DESC LIMIT 200`,
+    ),
   ]);
-  return { stats: { ...stats, commission: Math.round(Number(stats?.paid ?? 0) * 0.15) }, users, shifts, applications };
+  return { stats: { ...stats, commission: Math.round(Number(stats?.paid ?? 0) * 0.15) }, users, shifts, applications, sessions };
 }
 
 // Bloklash va blokdan chiqarish (kelmagan ishchini qayta faollashtirish shu yerdan)
