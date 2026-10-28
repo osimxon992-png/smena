@@ -333,7 +333,102 @@ async function cancel({ user, id }: Ctx) {
   return { ok: true };
 }
 
+// --- Admin paneli ---
+// Kirish ADMIN_PASSWORD muhit o'zgaruvchisi bilan; sessiya imzolangan cookie (bazada saqlanmaydi).
+// Parol almashtirilsa, barcha admin sessiyalari o'z-o'zidan bekor bo'ladi.
+
+const ADMIN_TTL = 12 * 3600;
+const adminSign = (exp: number) => crypto.createHmac('sha256', process.env.ADMIN_PASSWORD!).update(`smena-admin:${exp}`).digest('base64url');
+const sameSecret = (a: string, b: string) => crypto.timingSafeEqual(crypto.createHash('sha256').update(a).digest(), crypto.createHash('sha256').update(b).digest());
+
+function isAdmin(cookieHeader: string) {
+  if (!process.env.ADMIN_PASSWORD) return false;
+  const m = /(?:^|;\s*)adm=(\d+)\.([\w-]+)/.exec(cookieHeader);
+  return !!m && Number(m[1]) > Date.now() / 1000 && sameSecret(m[2], adminSign(Number(m[1])));
+}
+
+function needAdmin(ctx: Ctx) {
+  if (!isAdmin(ctx.cookieHeader)) fail(401, 'Admin sifatida kiring');
+}
+
+// shortcut: urinishlar cheklanmagan; ommaga chiqarishdan oldin IP bo'yicha limit qo'ying
+function adminLogin(ctx: Ctx) {
+  const secret = process.env.ADMIN_PASSWORD || fail(503, 'Admin paneli yoqilmagan: serverda ADMIN_PASSWORD o‘rnatilmagan');
+  if (!sameSecret(String(ctx.body.password ?? ''), secret)) fail(401, 'Parol noto‘g‘ri');
+  const exp = Math.floor(Date.now() / 1000) + ADMIN_TTL;
+  ctx.cookie = `adm=${exp}.${adminSign(exp)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${ADMIN_TTL}${ctx.https ? '; Secure' : ''}`;
+  return { ok: true };
+}
+
+function adminLogout(ctx: Ctx) {
+  ctx.cookie = 'adm=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0';
+  return { ok: true };
+}
+
+// Panel uchun hamma narsa bitta so'rovda: raqamlar va uchta ro'yxat
+// shortcut: har ro'yxatdan oxirgi 500 tasi; ma'lumot ko'payganda sahifalash qo'shing
+async function adminOverview(ctx: Ctx) {
+  needAdmin(ctx);
+  const [stats, users, shifts, applications] = await Promise.all([
+    one(
+      `SELECT
+         (SELECT COUNT(*) FROM users WHERE role = 'worker') workers,
+         (SELECT COUNT(*) FROM users WHERE role = 'business') businesses,
+         (SELECT COUNT(*) FROM users WHERE blocked = 1) blocked,
+         (SELECT COUNT(*) FROM shifts) shifts,
+         (SELECT COUNT(*) FROM shifts s WHERE ${OPEN}) open_shifts,
+         (SELECT COUNT(*) FROM applications) applications,
+         (SELECT COUNT(*) FROM applications WHERE status = 'pending') pending,
+         (SELECT COUNT(*) FROM applications WHERE status = 'came') came,
+         (SELECT COUNT(*) FROM applications WHERE status = 'noshow') noshow,
+         (SELECT COALESCE(SUM(s.pay), 0) FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE a.status = 'came') paid`,
+      ...openArgs(),
+    ),
+    all(
+      `SELECT u.id, u.role, u.name, u.org, u.phone, u.blocked, u.created_at,
+         CASE WHEN u.role = 'worker'
+           THEN (SELECT ROUND(AVG(worker_rating), 1) FROM applications WHERE worker_id = u.id)
+           ELSE (SELECT ROUND(AVG(a.business_rating), 1) FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE s.business_id = u.id) END rating,
+         (SELECT COUNT(*) FROM applications WHERE worker_id = u.id AND status = 'came') done,
+         (SELECT COUNT(*) FROM applications WHERE worker_id = u.id AND status = 'noshow') noshows,
+         (SELECT COUNT(*) FROM shifts WHERE business_id = u.id) shifts
+       FROM users u ORDER BY u.id DESC LIMIT 500`,
+    ),
+    all(
+      `SELECT s.id, s.title, s.place, s.date, s.start_time, s.end_time, s.pay, s.slots, s.created_at, u.org, u.phone,
+         ${TAKEN} taken,
+         (SELECT COUNT(*) FROM applications x WHERE x.shift_id = s.id AND x.status = 'pending') pending,
+         (SELECT COUNT(*) FROM applications x WHERE x.shift_id = s.id AND x.status = 'came') came,
+         (SELECT COUNT(*) FROM applications x WHERE x.shift_id = s.id AND x.status = 'noshow') noshow,
+         CASE WHEN ${OPEN} THEN 1 ELSE 0 END is_open
+       FROM shifts s JOIN users u ON u.id = s.business_id ORDER BY s.date DESC, s.start_time DESC LIMIT 500`,
+      ...openArgs(),
+    ),
+    all(
+      `SELECT a.id, a.status, a.worker_rating, a.business_rating, a.created_at,
+         w.id worker_id, w.name worker, w.phone worker_phone, s.title, s.date, s.start_time, s.pay, b.org
+       FROM applications a JOIN users w ON w.id = a.worker_id JOIN shifts s ON s.id = a.shift_id JOIN users b ON b.id = s.business_id
+       ORDER BY a.id DESC LIMIT 500`,
+    ),
+  ]);
+  return { stats: { ...stats, commission: Math.round(Number(stats?.paid ?? 0) * 0.15) }, users, shifts, applications };
+}
+
+// Bloklash va blokdan chiqarish (kelmagan ishchini qayta faollashtirish shu yerdan)
+async function adminSetBlocked(ctx: Ctx) {
+  needAdmin(ctx);
+  if (typeof ctx.body.blocked !== 'boolean') fail(400, 'blocked: true yoki false bo‘lishi kerak');
+  const { rowsAffected } = await exec('UPDATE users SET blocked = ? WHERE id = ?', ctx.body.blocked ? 1 : 0, ctx.id);
+  if (!rowsAffected) fail(404, 'Foydalanuvchi topilmadi');
+  return { ok: true };
+}
+
 const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
+  ['POST', /^\/api\/admin\/login$/, adminLogin],
+  ['POST', /^\/api\/admin\/logout$/, adminLogout],
+  ['GET', /^\/api\/admin\/me$/, (ctx) => ({ enabled: !!process.env.ADMIN_PASSWORD, admin: isAdmin(ctx.cookieHeader) })],
+  ['GET', /^\/api\/admin\/overview$/, adminOverview],
+  ['POST', /^\/api\/admin\/users\/(\d+)$/, adminSetBlocked],
   ['POST', /^\/api\/register$/, register],
   ['POST', /^\/api\/login$/, login],
   ['POST', /^\/api\/logout$/, logout],

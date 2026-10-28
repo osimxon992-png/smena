@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 
 process.env.TURSO_DATABASE_URL = ':memory:';
+process.env.ADMIN_PASSWORD = 'test-admin-parol';
 // Baza manzili import paytida o'qiladi, shuning uchun api muhit o'rnatilgandan keyin yuklanadi
 const { handle } = await import('./lib/api.ts');
 
@@ -79,5 +80,24 @@ assert.equal(await status('w2', '/logout', {}), 200);
 assert.equal((await call('w2', '/me')).data, null);
 assert.equal(await status('w2', '/login', { phone: '935556677', password: 'xato12' }), 401);
 assert.equal(await status('w2', '/login', { phone: '935556677', password: 'secret1' }), 200);
+
+// Admin paneli
+assert.equal(await status('adm', '/admin/overview'), 401, 'kirmasdan admin ma’lumoti yo‘q');
+assert.equal(await status('adm', '/admin/login', { password: 'xato' }), 401);
+assert.equal(await status('adm', '/admin/login', { password: 'test-admin-parol' }), 200);
+const ov = (await call('adm', '/admin/overview')).data;
+const { workers, businesses, blocked, came, noshow, commission } = ov.stats;
+assert.deepEqual([workers, businesses, blocked, came, noshow, commission], [3, 2, 1, 1, 1, 37500], 'raqamlar va 15% komissiya');
+assert.equal(ov.users.length, 5);
+assert.equal(ov.shifts.length, 2);
+assert.equal(ov.applications.length, 3);
+assert.equal(await status('w', '/admin/overview'), 401, 'oddiy foydalanuvchi admin emas');
+const blockedId = ov.users.find((u: any) => u.blocked).id;
+assert.equal(await status('adm', `/admin/users/${blockedId}`, { blocked: false }), 200);
+assert.equal((await call('w', '/me')).data.blocked, false, 'admin blokdan chiqardi');
+assert.equal(await status('adm', '/admin/users/9999', { blocked: true }), 404);
+assert.equal(await status('adm', `/admin/users/${blockedId}`, { blocked: 'ha' }), 400);
+assert.equal(await status('adm', '/admin/logout', {}), 200);
+assert.equal(await status('adm', '/admin/overview'), 401, 'chiqqandan keyin yopiq');
 
 console.log('Hammasi joyida ✓');
