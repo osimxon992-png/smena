@@ -94,18 +94,6 @@ export default function AdminPanel() {
     <header className="admin-top">
       <Link className="logo" href="/">Smena</Link>
       <span className="admin-badge">Admin</span>
-      {access?.admin && (
-        <>
-          <nav className="admin-tabs" aria-label="Admin bo‘limlari">
-            {TABS.map(([k, label]) => <button key={k} type="button" className="pick" aria-pressed={tab === k} onClick={() => setTab(k)}>{label}</button>)}
-          </nav>
-          <div className="admin-refresh">
-            <span aria-live="polite">{updated ? `Yangilandi ${clock(updated)}` : 'Yuklanmoqda…'}</span>
-            <button type="button" className="btn btn-ghost" onClick={load}>Yangilash</button>
-            <button type="button" className="link" onClick={logout}>Chiqish</button>
-          </div>
-        </>
-      )}
     </header>
   );
 
@@ -125,10 +113,32 @@ export default function AdminPanel() {
   const apps = (data?.applications ?? []).filter((a) => (status === 'all' || a.status === status) && matches(q, a.worker, a.worker_phone, a.title, a.org));
   const search = <input className="search-input admin-search" type="search" placeholder="Ism, telefon, lavozim yoki biznes" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Qidirish" />;
 
+  // Yon menyu: bo'limlar soni bilan, pastida yangilanish vaqti va chiqish
+  const counts: Record<Tab, number | null> = { umumiy: null, users: data?.users.length ?? null, shifts: s?.open_shifts ?? null, apps: s?.pending ?? null };
+  const side = (
+    <aside className="admin-side">
+      <div className="side-brand"><Link className="logo" href="/">Smena</Link><span className="admin-badge">Admin</span></div>
+      <nav className="side-nav" aria-label="Admin bo‘limlari">
+        {TABS.map(([k, label]) => (
+          <button key={k} type="button" aria-current={tab === k ? 'page' : undefined} onClick={() => setTab(k)}>
+            <span>{label}</span>
+            {counts[k] != null && <small className={k === 'apps' && counts[k] ? 'hot' : ''} title={k === 'shifts' ? 'Ochiq smenalar' : k === 'apps' ? 'Javob kutayotganlar' : undefined}>{counts[k]}</small>}
+          </button>
+        ))}
+      </nav>
+      <div className="side-foot">
+        <span aria-live="polite">{updated ? `Yangilandi ${clock(updated)}` : 'Yuklanmoqda…'}</span>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={load}>Yangilash</button>
+        <Link className="side-link" href="/" target="_blank">Saytni ochish</Link>
+        <button type="button" className="side-link" onClick={logout}>Chiqish</button>
+      </div>
+    </aside>
+  );
+
   return (
-    <div className="admin">
-      <div className="wrap">
-        {head}
+    <div className="admin admin-shell">
+      {side}
+      <div className="admin-main">
         {error && <p className="banner danger">{error}</p>}
         {!data ? <p className="lead">Ma’lumotlar yuklanmoqda…</p> : (
           <main id="asosiy">
