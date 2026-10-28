@@ -1,0 +1,144 @@
+{
+  "buildPath": "code",
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/canon.html"
+        ],
+        "createdAt": "2026-10-27T16:21:05.337Z",
+        "reason": "Claude: throwaway decision-round sketch, not shipped; canon card shows the category standard on purpose"
+      },
+      {
+        "rule": "border-accent-on-rounded",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/assigned.html"
+        ],
+        "createdAt": "2026-10-27T16:21:06.014Z",
+        "reason": "Claude: throwaway decision-round sketch, not shipped; canon card shows the category standard on purpose"
+      },
+      {
+        "rule": "oversized-h1",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/challenger-monochrome.html"
+        ],
+        "createdAt": "2026-10-27T16:21:06.629Z",
+        "reason": "Claude: throwaway decision-round sketch, not shipped; canon card shows the category standard on purpose"
+      },
+      {
+        "rule": "skipped-heading",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/challenger-monochrome.html"
+        ],
+        "createdAt": "2026-10-27T16:21:07.287Z",
+        "reason": "Claude: throwaway decision-round sketch, not shipped; canon card shows the category standard on purpose"
+      },
+      {
+        "rule": "low-contrast",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/assigned.html"
+        ],
+        "createdAt": "2026-10-27T16:21:07.942Z",
+        "reason": "Claude: throwaway decision-round sketch, not shipped; canon card shows the category standard on purpose"
+      },
+      {
+        "rule": "low-contrast",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/canon.html"
+        ],
+        "createdAt": "2026-10-27T16:21:08.570Z",
+        "reason": "Claude: throwaway decision-round sketch, not shipped; canon card shows the category standard on purpose"
+      },
+      {
+        "rule": "repeating-stripes-gradient",
+        "value": "*",
+        "files": [
+          "public/style.css"
+        ],
+        "createdAt": "2026-10-27T16:41:11.656Z",
+        "reason": "Claude: direction contract OWN-WORLD names kraft fibre grain and the ruled rules sheet as the world's material (surface brief public-index-html.md)"
+      },
+      {
+        "rule": "repeating-stripes-gradient",
+        "value": "*",
+        "files": [
+          "public/index.html"
+        ],
+        "createdAt": "2026-10-27T16:57:06.459Z",
+        "reason": "Claude: direction contract OWN-WORLD names kraft fibre grain and the ruled rules sheet as the world's material"
+      },
+      {
+        "rule": "repeating-stripes-gradient",
+        "value": "*",
+        "files": [
+          "public/app.html"
+        ],
+        "createdAt": "2026-10-27T16:57:07.115Z",
+        "reason": "Claude: same kraft fibre texture from the direction contract, inherited by the app shell"
+      },
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "public/index.html"
+        ],
+        "createdAt": "2026-10-27T16:57:07.707Z",
+        "reason": "Claude: false positive, detector cannot resolve font shorthands with var(); rendered h1 is 77px, h2 up to 74px, body 17px (checked in browser)"
+      },
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "public/index.html"
+        ],
+        "createdAt": "2026-10-27T16:57:21.890Z",
+        "reason": "Claude: false positive, signs and sheets render 22-34px padding (verified in desktop and 390px screenshots); tape pseudo-elements sit over the edge by design"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/assigned.html"
+        ],
+        "createdAt": "2026-10-27T17:02:06.951Z",
+        "reason": "Claude: unchosen or pre-decision sketch from the direction round, not shipped; its fonts predate DESIGN.md by design"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/model-pick.html"
+        ],
+        "createdAt": "2026-10-27T17:02:07.564Z",
+        "reason": "Claude: unchosen or pre-decision sketch from the direction round, not shipped; its fonts predate DESIGN.md by design"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/canon.html"
+        ],
+        "createdAt": "2026-10-27T17:02:08.240Z",
+        "reason": "Claude: unchosen or pre-decision sketch from the direction round, not shipped; its fonts predate DESIGN.md by design"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/challenger-monochrome.html"
+        ],
+        "createdAt": "2026-10-27T17:02:08.851Z",
+        "reason": "Claude: unchosen or pre-decision sketch from the direction round, not shipped; its fonts predate DESIGN.md by design"
+      }
+    ]
+  }
+}

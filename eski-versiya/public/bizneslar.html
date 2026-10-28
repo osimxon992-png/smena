@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<title>Bizneslar uchun: Smena</title>
+<meta name="description" content="Bir kunlik smena e’lon qiling. Komissiya faqat kelgan ishchilar uchun, haqning 15%.">
+<!-- include head -->
+</head>
+<body>
+<!-- include header -->
+
+<main id="asosiy">
+  <header class="page-head wrap">
+    <h1 class="page-title">Bizneslar uchun</h1>
+    <p class="lead">To‘yxona, restoran, ombor yoki topshirish punkti: bir kunga qo‘shimcha odam kerak bo‘lsa, shu yerda e’lon qiling.</p>
+  </header>
+
+  <section class="section wrap" id="hisob" aria-labelledby="biz-title">
+    <div class="biz-grid">
+      <div>
+        <h2 id="biz-title" class="h2 wipe">Ertaga ishchi kerakmi?</h2>
+        <p class="lead">Smenani bir daqiqada e’lon qiling. Reytingi va bajargan smenalari ko‘rinib turgan ishchilar ariza beradi, kimni olishni o‘zingiz tanlaysiz.</p>
+        <ol class="biz-steps">
+          <li>Lavozim, sana, vaqt va haqni yozasiz.</li>
+          <li>Arizalarni ko‘rib, kerakli odamlarni qabul qilasiz.</li>
+          <li>Smena kuni kelganlarni belgilaysiz. Komissiya faqat kelganlar uchun.</li>
+        </ol>
+        <a class="btn btn-lg" href="/app.html#/royxat?rol=biznes">Smena e’lon qilish</a>
+      </div>
+      <div class="receipt-wrap">
+        <form class="receipt" data-calc aria-labelledby="calc-title">
+          <h3 id="calc-title">Hisob-kitob</h3>
+          <label>Bir ishchining haqi <output data-out="pay">250 000 so‘m</output>
+            <input type="range" name="pay" min="100000" max="600000" step="10000" value="250000"></label>
+          <label>Kelgan ishchilar <output data-out="n">4 kishi</output>
+            <input type="range" name="n" min="1" max="20" value="4"></label>
+          <dl>
+            <div><dt>Ishchilarga</dt><dd data-out="wages">1 000 000 so‘m</dd></div>
+            <div class="fee"><dt>Smena komissiyasi, 15%</dt><dd data-out="fee">150 000 so‘m</dd></div>
+            <div><dt>Ishchi kelmasa</dt><dd>0 so‘m</dd></div>
+          </dl>
+          <p class="receipt-note">Komissiya faqat kelgan ishchilar uchun olinadi. Ishchilar uchun Smena bepul.</p>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <nav class="next wrap" aria-label="Keyingi sahifa">
+    <a class="next-sign stall-paper" href="/savollar.html"><span>Keyingisi</span><strong>Savollar</strong></a>
+  </nav>
+</main>
+
+<!-- include footer -->
+</body>
+</html>

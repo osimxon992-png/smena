@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-27T17:30:00Z",
+  "title": "Design System: Smena",
+  "extensions": {
+    "colorMeta": {
+      "kraft": { "role": "primary", "displayName": "Kraft", "canonical": "#C99A5B", "tonalRamp": ["#2E1F0C", "#4A3218", "#6A4925", "#8D6334", "#B07F46", "#C99A5B", "#DDBB87", "#F0DFC2"] },
+      "red": { "role": "secondary", "displayName": "Market Red", "canonical": "#C2321A", "tonalRamp": ["#330A04", "#5A1408", "#821E0D", "#A82713", "#C2321A", "#D9614D", "#EC9A8C", "#F8D3CC"] },
+      "teal": { "role": "tertiary", "displayName": "Dome Teal", "canonical": "#1F6F80", "tonalRamp": ["#071C21", "#0D323A", "#144A56", "#1A5F6E", "#1F6F80", "#4E95A4", "#8DBDC7", "#CFE5EA"] },
+      "ink": { "role": "neutral", "displayName": "Marker Ink", "canonical": "#18160F", "tonalRamp": ["#18160F", "#2B2719", "#3B3123", "#544835", "#71644D", "#958A73", "#BDB4A0", "#E3DDD0"] },
+      "paper": { "role": "neutral", "displayName": "Tag Paper", "canonical": "#F6F0E1", "tonalRamp": ["#3A3326", "#5A4E3C", "#7E705A", "#A49681", "#C7BBA5", "#E8DDC4", "#F6F0E1", "#FFFDF7"] },
+      "spent": { "role": "neutral", "displayName": "Spent Card", "canonical": "#B9B1A3" }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Marker Display", "purpose": "Hero headline only, two lines, second indented." },
+      "headline": { "displayName": "Marker Headline", "purpose": "Section titles and sign titles." },
+      "price": { "displayName": "Marker Price", "purpose": "Pay amounts in Market Red on paper." },
+      "title": { "displayName": "Grotesk Title", "purpose": "Step titles, tag roles, ticket titles." },
+      "body": { "displayName": "Body", "purpose": "All reading text." },
+      "label": { "displayName": "Label", "purpose": "Times, seats left, form labels; tabular figures." }
+    },
+    "shadows": [
+      { "name": "hang", "value": "drop-shadow(0 16px 16px rgba(50, 28, 6, .4))", "purpose": "Tags hanging on twine; on the wrapper because the tag is clip-pathed." },
+      { "name": "pinned-sheet", "value": "0 18px 30px -20px rgba(50, 28, 6, .55)", "purpose": "Taped notes, sheets, signs, forms." },
+      { "name": "stack", "value": "drop-shadow(0 14px 14px rgba(50, 28, 6, .32))", "purpose": "The app's grid of flat tickets." }
+    ],
+    "motion": [
+      { "name": "marker-wipe", "value": "clip-path 1.1s cubic-bezier(.16, 1, .3, 1)", "purpose": "Section headings are written in once when they enter." },
+      { "name": "stamp-hit", "value": "transform .3s cubic-bezier(.16, 1, .3, 1)", "purpose": "A stamp lands on the story tag when its step arrives." },
+      { "name": "twine-swing", "value": "damped spring, k .06, damping .9", "purpose": "Hanging tags swing with scroll velocity." }
+    ],
+    "breakpoints": [
+      { "name": "nav", "value": "760px" },
+      { "name": "split", "value": "900px" },
+      { "name": "hero-note", "value": "960px" },
+      { "name": "twine", "value": "1200px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Ink button with hand-cut corners for most actions.",
+      "html": "<button class=\"ds-btn\">Ro‘yxatdan o‘tish</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; min-height: 48px; padding: 0 22px; border: 0; border-radius: 3px 7px 4px 6px / 6px 3px 7px 4px; background: #18160F; color: #F6F0E1; font: 600 1rem/1 Onest, 'Segoe UI', sans-serif; cursor: pointer; transition: transform .15s ease; } .ds-btn:hover { transform: rotate(-1deg) translateY(-1px); } .ds-btn:focus-visible { outline: 3px solid #18160F; outline-offset: 3px; }"
+    },
+    {
+      "name": "Sale Button",
+      "kind": "button",
+      "refersTo": "button-sale",
+      "description": "Market Red, reserved for the main landing action.",
+      "html": "<button class=\"ds-btn-red\">Barcha smenalar</button>",
+      "css": ".ds-btn-red { display: inline-flex; align-items: center; min-height: 56px; padding: 0 28px; border: 0; border-radius: 3px 7px 4px 6px / 6px 3px 7px 4px; background: #C2321A; color: #F6F0E1; font: 600 1.08rem/1 Onest, 'Segoe UI', sans-serif; cursor: pointer; transition: transform .15s ease, background-color .15s ease; } .ds-btn-red:hover { background: #9E240F; transform: rotate(-1deg) translateY(-1px); } .ds-btn-red:focus-visible { outline: 3px solid #18160F; outline-offset: 3px; }"
+    },
+    {
+      "name": "Line Button",
+      "kind": "button",
+      "refersTo": "button-line",
+      "description": "Secondary action with a 3px ink ring.",
+      "html": "<button class=\"ds-btn-line\">Menga ishchi kerak</button>",
+      "css": ".ds-btn-line { display: inline-flex; align-items: center; min-height: 48px; padding: 0 22px; border: 0; border-radius: 3px 7px 4px 6px / 6px 3px 7px 4px; background: transparent; box-shadow: inset 0 0 0 3px #18160F; color: #18160F; font: 600 1rem/1 Onest, 'Segoe UI', sans-serif; cursor: pointer; } .ds-btn-line:hover { background: rgba(24, 22, 15, .07); } .ds-btn-line:focus-visible { outline: 3px solid #18160F; outline-offset: 3px; }"
+    },
+    {
+      "name": "Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Paper field with ink border and teal focus.",
+      "html": "<label class=\"ds-field\"><span>Lavozim</span><input placeholder=\"Ofitsiant\"></label>",
+      "css": ".ds-field { display: grid; gap: 6px; font: 600 1rem Onest, 'Segoe UI', sans-serif; color: #18160F; } .ds-field input { min-height: 50px; padding: 10px 14px; border: 2px solid #18160F; border-radius: 3px 7px 4px 6px / 6px 3px 7px 4px; background: #FFFDF7; font: 400 1rem Onest, 'Segoe UI', sans-serif; } .ds-field input::placeholder { color: #7A6D58; } .ds-field input:focus { outline: 3px solid #1F6F80; outline-offset: 1px; }"
+    },
+    {
+      "name": "State Stamp",
+      "kind": "chip",
+      "description": "Rubber-stamp status chip.",
+      "html": "<span class=\"ds-stamp\">Qabul qilindi</span>",
+      "css": ".ds-stamp { display: inline-block; padding: 3px 10px; border: 2px solid currentColor; border-radius: 5px; color: #1F6F80; font: 700 .86rem/1.3 Onest, 'Segoe UI', sans-serif; transform: rotate(-2deg); }"
+    },
+    {
+      "name": "Price Tag",
+      "kind": "custom",
+      "refersTo": "price-tag",
+      "description": "The signature shift tag: role, red marker pay, place, teal time, seats, action.",
+      "html": "<div class=\"ds-hang\"><article class=\"ds-tag\"><p class=\"ds-role\">Ofitsiant</p><p class=\"ds-pay\">250 000 <small>so‘m</small></p><p class=\"ds-meta\">Bahor to‘yxonasi, Yunusobod</p><p class=\"ds-when\">Bugun, 18:00–23:00</p><a class=\"ds-act\" href=\"#\">Ariza berish</a></article></div>",
+      "css": ".ds-hang { filter: drop-shadow(0 16px 16px rgba(50, 28, 6, .4)); width: 236px; } .ds-tag { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 34px 18px 16px; background: #F6F0E1; color: #18160F; clip-path: polygon(22% 0, 78% 0, 100% 9%, 100% 100%, 0 100%, 0 9%); font-family: Onest, 'Segoe UI', sans-serif; } .ds-tag::before { content: ''; position: absolute; top: 12px; left: 50%; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; background: #A57638; } .ds-tag p { margin: 0; } .ds-role { font: 800 1.05rem/1.25 Onest, sans-serif; } .ds-pay { font: 400 1.9rem/1.1 'Permanent Marker', cursive; color: #C2321A; margin: 6px 0 4px !important; } .ds-pay small { font-size: .5em; } .ds-meta { font-size: .92rem; color: #5A4E3C; } .ds-when { font: 600 .92rem Onest, sans-serif; color: #1F6F80; } .ds-act { display: block; margin-top: 12px; padding: 11px; background: #18160F; color: #F6F0E1; text-align: center; font: 600 .95rem Onest, sans-serif; text-decoration: none; border-radius: 3px 7px 4px 6px / 6px 3px 7px 4px; } .ds-act:hover { background: #C2321A; } .ds-act:focus-visible { outline: 3px solid #18160F; outline-offset: 3px; }"
+    },
+    {
+      "name": "Rule Sign",
+      "kind": "custom",
+      "refersTo": "sign-rule",
+      "description": "Teal painted sign carrying the reliability rule.",
+      "html": "<div class=\"ds-sign\"><strong>Kelmagan bloklanadi.</strong><span>Qabul qilingan smenaga kelmagan ishchi platformadan chiqariladi.</span></div>",
+      "css": ".ds-sign { max-width: 430px; padding: 28px; background: #1F6F80; color: #F6F0E1; box-shadow: 0 18px 30px -20px rgba(50, 28, 6, .6); transform: rotate(-1.5deg); font-family: Onest, 'Segoe UI', sans-serif; } .ds-sign strong { display: block; font: 400 1.9rem/1.1 'Permanent Marker', cursive; } .ds-sign span { display: block; margin-top: 6px; font-size: .98rem; line-height: 1.45; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Chorsu narx taxtasi",
+    "overview": "Smena sells one-day shifts the way Chorsu bazaar sells goods: the price is written large on a cardboard tag, hung on twine across the stall, nothing hidden. The whole landing is drenched in kraft cardboard; paper price tags, taped notes and painted signs sit on it. The app inherits the same materials with less theatre: a lighter kraft ground, shifts as paper tags laid flat, forms on taped paper sheets.\n\nInformation never hides behind the material. Pay, time, place and seats left are on every tag; the one rule (accepted and absent means blocked) is a teal sign that appears in the first viewport and again as its own section.",
+    "keyCharacteristics": [
+      "Kraft cardboard ground with fibre grain and noise, never a flat beige.",
+      "Felt-marker display voice for headlines, prices and stamps; a sturdy grotesk for everything read.",
+      "Red marker means money and only money.",
+      "Depth comes from tape and soft drop shadows, not from cards floating on blur.",
+      "Spent things (full or past shifts) turn into grey card."
+    ],
+    "rules": [
+      { "name": "The Red Is Money Rule", "body": "Red marks pay, the sale action and the commission. Red never sits directly on kraft as text: it fails contrast there and it stops meaning money.", "section": "colors" },
+      { "name": "The Spent Card Rule", "body": "Only open shifts get colour. A full or past shift becomes Spent Card with Ink Soft text and an outlined, disabled action.", "section": "colors" },
+      { "name": "The One Marker Rule", "body": "Permanent Marker is for headlines, prices, stamps and sign titles only. Buttons, body, form text and numbers in tables use Onest.", "section": "typography" },
+      { "name": "The Tabular Rule", "body": "Every time, seat count and amount uses tabular figures.", "section": "typography" },
+      { "name": "The Taped Not Floated Rule", "body": "Raised paper gets a soft, offset, warm shadow and often two strips of translucent tape. No zero-blur offset blocks, no glass.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do show pay, time, place and seats on every shift.",
+      "Do label example content \"Namuna\" wherever a visitor could take it for a real shift.",
+      "Do keep one authored motion per idea: tags swing on scroll, headings are written in with a marker wipe, stamps hit when a step arrives.",
+      "Do respect reduced motion: no swing, no wipe, no pinned row scroll."
+    ],
+    "donts": [
+      "Don't use purple anywhere.",
+      "Don't put red text on kraft, or use red for anything other than money and the sale action.",
+      "Don't add kickers or eyebrow labels above headings.",
+      "Don't set body copy, buttons or form text in the marker face.",
+      "Don't float containers on blur or glass, or use hard offset block shadows.",
+      "Don't invent statistics, partners, reviews or press; there are none yet."
+    ]
+  }
+}

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="uz"><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Onest:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;font-family:Onest,sans-serif;color:#18160F;
+background:
+ repeating-linear-gradient(92deg,rgba(80,50,20,.06) 0 2px,transparent 2px 7px),
+ repeating-linear-gradient(0deg,rgba(255,255,255,.05) 0 1px,transparent 1px 4px),
+ radial-gradient(120% 90% at 30% 20%,#D4A867,#B9894B 70%,#A97A40);}
+nav{display:flex;justify-content:space-between;align-items:center;padding:28px 56px}
+.logo{font:400 40px 'Permanent Marker';transform:rotate(-3deg)}
+.logo b{color:#D2381F}
+nav ul{display:flex;gap:34px;list-style:none;font:600 18px Onest}
+nav li:last-child{background:#18160F;color:#F6F0E1;padding:10px 18px;transform:rotate(1deg)}
+h1{font:400 150px/0.9 'Permanent Marker';letter-spacing:-2px;padding:6px 56px 0;transform:rotate(-1.5deg);transform-origin:left}
+h1 span{color:#D2381F}
+.string{position:absolute;left:0;right:0;top:440px;height:40px;
+ border-top:3px solid #3a2a18;border-radius:50%/0 0 100% 100%}
+.tags{position:absolute;left:70px;right:70px;top:430px;display:flex;justify-content:space-between}
+.tag{width:236px;background:#F6F0E1;padding:30px 20px 18px;position:relative;
+ box-shadow:0 14px 24px -12px rgba(40,20,0,.55);clip-path:polygon(18% 0,82% 0,100% 12%,100% 100%,0 100%,0 12%)}
+.tag:before{content:'';position:absolute;top:10px;left:50%;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:#B9894B;box-shadow:inset 0 0 0 3px #8b6a3c}
+.tag:nth-child(1){transform:rotate(-4deg);margin-top:24px}
+.tag:nth-child(2){transform:rotate(3deg);margin-top:60px}
+.tag:nth-child(3){transform:rotate(-2deg);margin-top:30px}
+.tag:nth-child(4){transform:rotate(5deg);margin-top:70px}
+.tag:nth-child(5){transform:rotate(-3deg);margin-top:20px;filter:grayscale(1);opacity:.7}
+.role{font:800 20px Onest}
+.price{font:400 52px/1 'Permanent Marker';color:#D2381F;margin:8px 0 4px}
+.price small{font-size:22px}
+.meta{font:400 15px/1.35 Onest}
+.when{font:600 15px Onest;color:#1F7A8C;margin-top:6px}
+.go{display:block;margin-top:14px;background:#18160F;color:#F6F0E1;text-align:center;padding:12px;font:600 16px Onest}
+.left{font:600 14px Onest;margin-top:6px}
+.note{position:absolute;left:56px;bottom:40px;width:470px;background:#F6F0E1;padding:24px 26px;transform:rotate(-1deg);box-shadow:0 10px 20px -12px rgba(0,0,0,.5)}
+.note:before,.note:after{content:'';position:absolute;top:-12px;width:90px;height:26px;background:rgba(240,235,200,.75)}
+.note:before{left:20px;transform:rotate(-6deg)}.note:after{right:20px;transform:rotate(5deg)}
+.note p{font:400 18px/1.45 Onest;max-width:60ch}
+.cta{display:flex;gap:14px;margin-top:16px}
+.cta a{padding:14px 22px;font:600 17px Onest;text-decoration:none}
+.cta a:first-child{background:#D2381F;color:#fff}
+.cta a:last-child{border:3px solid #18160F;color:#18160F}
+.rule{position:absolute;right:60px;bottom:52px;width:430px;background:#1F7A8C;color:#F6F0E1;padding:22px 26px;transform:rotate(1.5deg)}
+.rule b{font:400 30px/1.1 'Permanent Marker';display:block}
+.rule p{font:400 15px/1.4 Onest;margin-top:8px}
+.sample{position:absolute;right:62px;top:396px;font:600 13px Onest;background:#18160F;color:#F6F0E1;padding:4px 10px}
+</style></head><body>
+<nav><div class="logo">Smena<b>.</b></div>
+<ul><li>Smenalar</li><li>Bizneslar uchun</li><li>Kirish</li><li>Ro‘yxatdan o‘tish</li></ul></nav>
+<h1>Bugungi smenalar.<br><span>Haqi ochiq yozilgan.</span></h1>
+<div class="string"></div>
+<span class="sample">Namuna</span>
+<div class="tags">
+ <div class="tag"><div class="role">Ofitsiant</div><div class="price">250 000 <small>so‘m</small></div><div class="meta">Bahor to‘yxonasi, Yunusobod</div><div class="when">Bugun 18:00–23:00</div><div class="left">5 joy qoldi</div><span class="go">Ariza berish</span></div>
+ <div class="tag"><div class="role">Buyurtma teruvchi</div><div class="price">220 000 <small>so‘m</small></div><div class="meta">Marketpleys ombori, Sergeli</div><div class="when">Ertaga 09:00–18:00</div><div class="left">7 joy qoldi</div><span class="go">Ariza berish</span></div>
+ <div class="tag"><div class="role">Oshxona yordamchisi</div><div class="price">200 000 <small>so‘m</small></div><div class="meta">Milliy taomlar, Chilonzor</div><div class="when">Shanba 10:00–20:00</div><div class="left">2 joy qoldi</div><span class="go">Ariza berish</span></div>
+ <div class="tag"><div class="role">Yuk tashuvchi</div><div class="price">180 000 <small>so‘m</small></div><div class="meta">Ko‘chish xizmati, Mirzo Ulug‘bek</div><div class="when">Yakshanba 08:00–14:00</div><div class="left">3 joy qoldi</div><span class="go">Ariza berish</span></div>
+ <div class="tag"><div class="role">Promouter</div><div class="price">150 000 <small>so‘m</small></div><div class="meta">Savdo markazi, Olmazor</div><div class="when">Kecha</div><div class="left">To‘ldi</div><span class="go">Yopilgan</span></div>
+</div>
+<div class="note"><p>To‘yxona, restoran, ombor va topshirish punktlarida bir kunlik ish. Vaqti, joyi va haqi oldindan yozilgan: tanlaysiz, ariza berasiz, qabul qilinsangiz borasiz.</p>
+<div class="cta"><a>Barcha smenalar</a><a>Menga ishchi kerak</a></div></div>
+<div class="rule"><b>Kelmagan bloklanadi.</b><p>Shuning uchun bizneslar ishonadi. Bir kun oldin bekor qilish bepul.</p></div>
+</body></html>

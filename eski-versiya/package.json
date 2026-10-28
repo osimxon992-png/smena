@@ -1,0 +1,12 @@
+{
+  "name": "smena",
+  "private": true,
+  "description": "Bir kunlik smenalar platformasi",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
