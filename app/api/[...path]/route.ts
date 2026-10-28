@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 // Barcha /api/* so'rovlari lib/api.ts dagi bitta yo'naltirgichga tushadi
 async function respond(req: Request) {
   const url = new URL(req.url);
-  const res = handle({
+  const res = await handle({
     method: req.method,
     path: url.pathname,
     cookie: req.headers.get('cookie'),

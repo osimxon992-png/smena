@@ -4,3 +4,5 @@ next-env.d.ts
 *.tsbuildinfo
 smena.db*
 .impeccable/questions/
+.env
+.env*.local

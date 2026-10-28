@@ -1,17 +1,19 @@
-// Smena backend: SQLite (node:sqlite) va barcha API amallari. HTTP'dan mustaqil, shuning uchun test.ts uni to'g'ridan-to'g'ri chaqiradi.
+// Smena backend: Turso (libSQL) bazasi va barcha API amallari. HTTP'dan mustaqil, shuning uchun test.ts uni to'g'ridan-to'g'ri chaqiradi.
+// Vercel'da bir nechta nusxa bir vaqtda ishlaydi: "tekshir-keyin-yoz" o'rniga shartli UPDATE/DELETE ishlatiladi.
 import crypto from 'node:crypto';
-import path from 'node:path';
-
-// getBuiltinModule bundler'ni chetlab o'tadi: Next node:sqlite'ni o'zi yig'ishga urinmaydi
-const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as typeof import('node:sqlite');
+import { createClient, type InStatement, type ResultSet } from '@libsql/client';
 
 type Row = Record<string, any>;
 type User = Row & { id: number; role: 'worker' | 'business'; blocked: number };
 type Ctx = { user: User | undefined; body: Row; id: number; cookieHeader: string; https: boolean; cookie?: string };
 
-const db = new DatabaseSync(process.env.DB || path.join(process.cwd(), 'smena.db'));
-db.exec(`
-  PRAGMA foreign_keys = ON;
+// Lokalda smena.db fayli, Vercel'da TURSO_DATABASE_URL (libsql://...) va TURSO_AUTH_TOKEN
+const db = createClient({
+  url: process.env.TURSO_DATABASE_URL || 'file:smena.db',
+  authToken: process.env.TURSO_AUTH_TOKEN,
+});
+
+const ready = db.executeMultiple(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     role TEXT NOT NULL CHECK (role IN ('worker', 'business')),
@@ -53,9 +55,12 @@ db.exec(`
   );
 `);
 
-const one = (sql: string, ...p: any[]) => db.prepare(sql).get(...p) as Row | undefined;
-const all = (sql: string, ...p: any[]) => db.prepare(sql).all(...p) as Row[];
-const run = (sql: string, ...p: any[]) => db.prepare(sql).run(...p);
+// libSQL qatorlari massivga o'xshash obyekt: JSON uchun oddiy {ustun: qiymat} ga aylantiramiz
+const plain = (rs: ResultSet) => rs.rows.map((r) => Object.fromEntries(rs.columns.map((c, i) => [c, r[i]])) as Row);
+const exec = (sql: string, ...args: any[]) => db.execute({ sql, args });
+const one = async (sql: string, ...args: any[]) => plain(await exec(sql, ...args))[0] as Row | undefined;
+const all = async (sql: string, ...args: any[]) => plain(await exec(sql, ...args));
+const isUnique = (e: unknown) => /UNIQUE constraint failed/i.test(String((e as Error)?.message));
 
 class HttpError extends Error {
   status: number;
@@ -121,10 +126,10 @@ function verify(password: string, stored: string) {
 
 const sessionToken = (cookieHeader: string) => /(?:^|;\s*)sid=([^;]+)/.exec(cookieHeader)?.[1];
 
-function currentUser(cookieHeader: string) {
+async function currentUser(cookieHeader: string) {
   const token = sessionToken(cookieHeader);
   if (!token) return undefined;
-  return one(
+  return await one(
     "SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.created_at > datetime('now', '-30 days')",
     token,
   ) as User | undefined;
@@ -135,21 +140,21 @@ function need(user: User | undefined, role?: User['role']): asserts user is User
   if (role && user!.role !== role) fail(403, role === 'worker' ? 'Bu amal faqat ishchilar uchun' : 'Bu amal faqat bizneslar uchun');
 }
 
-function profile(u: Row) {
+async function profile(u: Row) {
   const stats = u.role === 'worker'
-    ? one("SELECT ROUND(AVG(worker_rating), 1) rating, COUNT(*) FILTER (WHERE status = 'came') done FROM applications WHERE worker_id = ?", u.id)
-    : one('SELECT ROUND(AVG(a.business_rating), 1) rating FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE s.business_id = ?', u.id);
+    ? await one("SELECT ROUND(AVG(worker_rating), 1) rating, COUNT(*) FILTER (WHERE status = 'came') done FROM applications WHERE worker_id = ?", u.id)
+    : await one('SELECT ROUND(AVG(a.business_rating), 1) rating FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE s.business_id = ?', u.id);
   return { id: u.id, role: u.role, name: u.name, org: u.org, phone: u.phone, blocked: !!u.blocked, ...stats };
 }
 
-function startSession(ctx: Ctx, userId: number) {
+async function startSession(ctx: Ctx, userId: number) {
   const token = crypto.randomBytes(32).toString('base64url');
-  run('INSERT INTO sessions (token, user_id) VALUES (?, ?)', token, userId);
+  await exec('INSERT INTO sessions (token, user_id) VALUES (?, ?)', token, userId);
   ctx.cookie = `sid=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 86400}${ctx.https ? '; Secure' : ''}`;
-  return profile(one('SELECT * FROM users WHERE id = ?', userId)!);
+  return profile((await one('SELECT * FROM users WHERE id = ?', userId))!);
 }
 
-function register(ctx: Ctx) {
+async function register(ctx: Ctx) {
   const { body } = ctx;
   const role = ['worker', 'business'].includes(body.role) ? body.role : fail(400, 'Kimligingizni tanlang');
   const name = str(body.name, 2, 60, 'Ism');
@@ -157,21 +162,27 @@ function register(ctx: Ctx) {
   const p = phone(body.phone);
   const password = typeof body.password === 'string' ? body.password : '';
   if (password.length < 6 || password.length > 100) fail(400, 'Parol kamida 6 belgidan iborat bo‘lsin');
-  if (one('SELECT 1 FROM users WHERE phone = ?', p)) fail(409, 'Bu raqam bilan ro‘yxatdan o‘tilgan. Kirish sahifasidan kiring');
-  const { lastInsertRowid } = run('INSERT INTO users (role, phone, name, org, pass) VALUES (?, ?, ?, ?, ?)', role, p, name, org, hash(password));
-  return startSession(ctx, Number(lastInsertRowid));
+  const taken = 'Bu raqam bilan ro‘yxatdan o‘tilgan. Kirish sahifasidan kiring';
+  if (await one('SELECT 1 FROM users WHERE phone = ?', p)) fail(409, taken);
+  try {
+    const { lastInsertRowid } = await exec('INSERT INTO users (role, phone, name, org, pass) VALUES (?, ?, ?, ?, ?)', role, p, name, org, hash(password));
+    return startSession(ctx, Number(lastInsertRowid));
+  } catch (e) {
+    if (isUnique(e)) fail(409, taken);
+    throw e;
+  }
 }
 
 // shortcut: login urinishlari cheklanmagan; ommaga chiqarishdan oldin IP bo'yicha limit qo'ying
-function login(ctx: Ctx) {
-  const u = one('SELECT * FROM users WHERE phone = ?', phone(ctx.body.phone));
+async function login(ctx: Ctx) {
+  const u = await one('SELECT * FROM users WHERE phone = ?', phone(ctx.body.phone));
   if (!u || !verify(String(ctx.body.password ?? ''), u.pass)) fail(401, 'Telefon raqam yoki parol noto‘g‘ri');
   return startSession(ctx, u!.id);
 }
 
-function logout(ctx: Ctx) {
+async function logout(ctx: Ctx) {
   const token = sessionToken(ctx.cookieHeader);
-  if (token) run('DELETE FROM sessions WHERE token = ?', token);
+  if (token) await exec('DELETE FROM sessions WHERE token = ?', token);
   ctx.cookie = 'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0';
   return { ok: true };
 }
@@ -189,11 +200,11 @@ function listShifts({ user }: Ctx) {
   );
 }
 
-function createShift({ user, body }: Ctx) {
+async function createShift({ user, body }: Ctx) {
   need(user, 'business');
   const d = date(body.date);
   if (d < now().date) fail(400, 'O‘tgan sanaga smena e’lon qilib bo‘lmaydi');
-  const { lastInsertRowid } = run(
+  const { lastInsertRowid } = await exec(
     'INSERT INTO shifts (business_id, title, place, date, start_time, end_time, pay, slots, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     user.id,
     str(body.title, 2, 80, 'Lavozim'),
@@ -208,12 +219,12 @@ function createShift({ user, body }: Ctx) {
   return { id: Number(lastInsertRowid) };
 }
 
-function shiftDetail({ user, id }: Ctx) {
+async function shiftDetail({ user, id }: Ctx) {
   need(user, 'business');
-  const shift = one(`SELECT s.*, u.org, ${TAKEN} taken FROM shifts s JOIN users u ON u.id = s.business_id WHERE s.id = ? AND s.business_id = ?`, id, user.id)
+  const shift = await one(`SELECT s.*, u.org, ${TAKEN} taken FROM shifts s JOIN users u ON u.id = s.business_id WHERE s.id = ? AND s.business_id = ?`, id, user.id)
     || fail(404, 'Smena topilmadi');
   // Telefon raqam faqat qabul qilingandan keyin ochiladi
-  const applicants = all(
+  const applicants = await all(
     `SELECT a.id, a.status, a.worker_rating, u.name, u.blocked,
        CASE WHEN a.status IN ('accepted', 'came', 'noshow') THEN u.phone END phone,
        (SELECT ROUND(AVG(worker_rating), 1) FROM applications WHERE worker_id = u.id) rating,
@@ -237,14 +248,18 @@ function myShifts({ user }: Ctx) {
 
 // --- Arizalar ---
 
-function apply({ user, id }: Ctx) {
+async function apply({ user, id }: Ctx) {
   need(user, 'worker');
   if (user.blocked) fail(403, 'Qabul qilingan smenaga kelmaganingiz uchun ariza bera olmaysiz');
-  const s = one(`SELECT s.*, ${TAKEN} taken FROM shifts s WHERE s.id = ? AND ${OPEN}`, id, ...openArgs())
+  const s = await one(`SELECT s.*, ${TAKEN} taken FROM shifts s WHERE s.id = ? AND ${OPEN}`, id, ...openArgs())
     || fail(404, 'Smena topilmadi yoki boshlanib bo‘lgan');
   if (s.taken >= s.slots) fail(409, 'Smenada bo‘sh joy qolmadi');
-  if (one('SELECT 1 FROM applications WHERE shift_id = ? AND worker_id = ?', id, user.id)) fail(409, 'Bu smenaga ariza bergansiz');
-  run('INSERT INTO applications (shift_id, worker_id) VALUES (?, ?)', id, user.id);
+  try {
+    await exec('INSERT INTO applications (shift_id, worker_id) VALUES (?, ?)', id, user.id);
+  } catch (e) {
+    if (isUnique(e)) fail(409, 'Bu smenaga ariza bergansiz');
+    throw e;
+  }
   return { ok: true };
 }
 
@@ -260,50 +275,61 @@ function myApplications({ user }: Ctx) {
 }
 
 // Biznes arizaga javob beradi yoki smenadan keyin kelgan-kelmaganini belgilaydi
-function decide({ user, id, body }: Ctx) {
+async function decide({ user, id, body }: Ctx) {
   need(user, 'business');
-  const a = one('SELECT a.*, s.slots, s.date FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE a.id = ? AND s.business_id = ?', id, user.id)
+  const a = await one('SELECT a.*, s.slots, s.date FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE a.id = ? AND s.business_id = ?', id, user.id)
     || fail(404, 'Ariza topilmadi');
   const { action } = body;
   if (action === 'accept' || action === 'reject') {
     if (a.status !== 'pending') fail(409, 'Bu arizaga javob berilgan');
-    if (action === 'accept') {
-      const { n } = one("SELECT COUNT(*) n FROM applications WHERE shift_id = ? AND status IN ('accepted', 'came', 'noshow')", a.shift_id)!;
-      if (n >= a.slots) fail(409, 'Smenada bo‘sh joy qolmadi');
+    // Joy borligini tekshirish va qabul qilish bitta so'rovda: ikki biznes oynasi bir vaqtda bossa ham joydan oshmaydi
+    const { rowsAffected } = action === 'accept'
+      ? await exec(
+        `UPDATE applications SET status = 'accepted' WHERE id = ? AND status = 'pending'
+           AND (SELECT COUNT(*) FROM applications x WHERE x.shift_id = ? AND x.status IN ('accepted', 'came', 'noshow')) < ?`,
+        id, a.shift_id, a.slots)
+      : await exec("UPDATE applications SET status = 'rejected' WHERE id = ? AND status = 'pending'", id);
+    if (!rowsAffected) {
+      const fresh = await one('SELECT status FROM applications WHERE id = ?', id);
+      fail(409, fresh?.status === 'pending' ? 'Smenada bo‘sh joy qolmadi' : 'Bu arizaga javob berilgan');
     }
-    run('UPDATE applications SET status = ? WHERE id = ?', action === 'accept' ? 'accepted' : 'rejected', id);
   } else if (action === 'came' || action === 'noshow') {
     if (a.status !== 'accepted') fail(409, 'Faqat qabul qilingan ishchini belgilash mumkin');
     if (a.date > now().date) fail(409, 'Kelgan-kelmaganini smena kuni belgilaysiz');
     const rating = action === 'came' ? int(body.rating, 1, 5, 'Baho') : null;
-    run('UPDATE applications SET status = ?, worker_rating = ? WHERE id = ?', action, rating, id);
-    if (action === 'noshow') run('UPDATE users SET blocked = 1 WHERE id = ?', a.worker_id);
+    const steps: InStatement[] = [{ sql: "UPDATE applications SET status = ?, worker_rating = ? WHERE id = ? AND status = 'accepted'", args: [action, rating, id] }];
+    if (action === 'noshow') steps.push({ sql: 'UPDATE users SET blocked = 1 WHERE id = ?', args: [a.worker_id] });
+    const [marked] = await db.batch(steps, 'write');
+    if (!marked.rowsAffected) fail(409, 'Bu ishchi allaqachon belgilangan');
   } else {
     fail(400, 'Noma’lum amal');
   }
   return { ok: true };
 }
 
-function workerApplication(user: User | undefined, id: number) {
+async function workerApplication(user: User | undefined, id: number) {
   need(user, 'worker');
-  return one('SELECT a.*, s.date FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE a.id = ? AND a.worker_id = ?', id, user.id)
+  return await one('SELECT a.*, s.date FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE a.id = ? AND a.worker_id = ?', id, user.id)
     || fail(404, 'Ariza topilmadi');
 }
 
-function rate({ user, id, body }: Ctx) {
-  const a = workerApplication(user, id);
-  if (a.status !== 'came' || a.business_rating) fail(409, 'Bu smenani baholab bo‘lmaydi');
-  run('UPDATE applications SET business_rating = ? WHERE id = ?', int(body.rating, 1, 5, 'Baho'), id);
+async function rate({ user, id, body }: Ctx) {
+  await workerApplication(user, id);
+  const rating = int(body.rating, 1, 5, 'Baho');
+  const { rowsAffected } = await exec("UPDATE applications SET business_rating = ? WHERE id = ? AND status = 'came' AND business_rating IS NULL", rating, id);
+  if (!rowsAffected) fail(409, 'Bu smenani baholab bo‘lmaydi');
   return { ok: true };
 }
 
-function cancel({ user, id }: Ctx) {
-  const a = workerApplication(user, id);
+async function cancel({ user, id }: Ctx) {
+  await workerApplication(user, id);
   // Smena kuni bekor qilish biznesni odamsiz qoldiradi; u holat "kelmadi" hisoblanadi
-  if (!(a.status === 'pending' || (a.status === 'accepted' && a.date > now().date))) {
-    fail(409, 'Qabul qilingan smenani kamida bir kun oldin bekor qilish mumkin');
-  }
-  run('DELETE FROM applications WHERE id = ?', id);
+  const { rowsAffected } = await exec(
+    `DELETE FROM applications WHERE id = ? AND (status = 'pending'
+       OR (status = 'accepted' AND (SELECT date FROM shifts WHERE id = applications.shift_id) > ?))`,
+    id, now().date,
+  );
+  if (!rowsAffected) fail(409, 'Qabul qilingan smenani kamida bir kun oldin bekor qilish mumkin');
   return { ok: true };
 }
 
@@ -326,9 +352,11 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
 export type ApiRequest = { method: string; path: string; cookie: string | null; contentType: string | null; body: string; https: boolean };
 export type ApiResponse = { status: number; data: unknown; cookie?: string };
 
-export function handle(req: ApiRequest): ApiResponse {
-  const ctx: Ctx = { user: currentUser(req.cookie ?? ''), body: {}, id: 0, cookieHeader: req.cookie ?? '', https: req.https };
+export async function handle(req: ApiRequest): Promise<ApiResponse> {
+  const ctx: Ctx = { user: undefined, body: {}, id: 0, cookieHeader: req.cookie ?? '', https: req.https };
   try {
+    await ready;
+    ctx.user = await currentUser(ctx.cookieHeader);
     const route = routes.find(([method, re]) => method === req.method && re.test(req.path)) || fail(404, 'Topilmadi');
     ctx.id = Number(route[1].exec(req.path)![1]);
     if (req.method === 'POST') {
@@ -339,7 +367,7 @@ export function handle(req: ApiRequest): ApiResponse {
       try { parsed = req.body ? JSON.parse(req.body) : {}; } catch { fail(400, 'Noto‘g‘ri so‘rov'); }
       ctx.body = parsed && typeof parsed === 'object' ? (parsed as Row) : {};
     }
-    return { status: 200, data: route[2](ctx) ?? null, cookie: ctx.cookie };
+    return { status: 200, data: (await route[2](ctx)) ?? null, cookie: ctx.cookie };
   } catch (err) {
     if (err instanceof HttpError) return { status: err.status, data: { error: err.message }, cookie: ctx.cookie };
     console.error(err);
