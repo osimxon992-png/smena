@@ -1,6 +1,7 @@
 // API o'z-o'zini tekshirish: node test.ts (vaqtinchalik xotiradagi libSQL bazasi bilan)
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import http from 'node:http';
 
 process.env.TURSO_DATABASE_URL = ':memory:';
 process.env.ADMIN_PASSWORD = 'test-admin-parol';
@@ -258,5 +259,70 @@ assert.equal(await status('s2', '/login/sms', { phoneToken: sms('935559002') }),
 assert.equal(await status('s2', '/login/sms', { phoneToken: 'abc' }), 401);
 assert.equal((await call('s2', '/login/sms', { phoneToken: sms('935559001') })).data.name, 'Yangi', 'SMS kod bilan kirish');
 assert.equal((await call('s2', '/me')).data.phone, '+998935559001');
+
+// Farbo (AI yordamchi): kalitsiz o'chiq; keyin soxta Gemini serveri bilan to'liq yo'l
+const WAV = Buffer.concat([Buffer.from('RIFF\0\0\0\0WAVE', 'latin1'), Buffer.alloc(200)]).toString('base64');
+assert.equal(await status('z', '/ai', {}), 400, 'savol yo‘q');
+assert.equal(await status('z', '/ai', { audio: Buffer.from('salom').toString('base64') }), 400, 'WAV emas');
+assert.equal(await status('z', '/ai', { text: 'salom' }), 503, 'kalitsiz Farbo o‘chiq');
+
+let seen: any[] = [];
+let answer: any = {};
+let busyModel = '';
+const fake = http.createServer((req, res) => {
+  let b = '';
+  req.on('data', (c) => (b += c));
+  req.on('end', () => {
+    seen.push({ url: req.url, key: req.headers['x-goog-api-key'], body: JSON.parse(b) });
+    res.statusCode = busyModel && req.url!.includes(`/${busyModel}:`) ? 503 : 200;
+    res.end(JSON.stringify(answer));
+  });
+});
+await new Promise<void>((r) => fake.listen(0, '127.0.0.1', () => r()));
+process.env.GEMINI_BASE = `http://127.0.0.1:${(fake.address() as any).port}`;
+process.env.GEMINI_API_KEY = 'test-kalit';
+const said = (o: object) => ({ candidates: [{ content: { parts: [{ text: JSON.stringify({ heard: '', shift_ids: [], link: '', ...o }) }] } }] });
+
+const openShift = (await call('guest', '/shifts')).data[0];
+answer = said({ heard: 'eshitilmagan', reply: 'Bugun bitta smena bor.', shift_ids: [openShift.id, 99999], link: '/qoidalar' });
+const z = (await call('w', '/ai', { text: 'Bugungi ishlarni ayt', history: [{ role: 'user', text: 'salom' }, { role: 'hacker', text: 'x' }] })).data;
+assert.equal(z.reply, 'Bugun bitta smena bor.');
+assert.deepEqual(z.shifts.map((s: any) => s.id), [openShift.id], 'faqat haqiqiy ochiq smena kartochka bo‘ladi');
+assert.equal(z.heard, '', 'matnli savolda heard yo‘q');
+assert.equal(z.link, '/qoidalar');
+const sent = seen.at(-1);
+assert.equal(sent.key, 'test-kalit');
+assert.match(sent.url, /\/gemini-3\.5-flash:generateContent$/);
+const sys = sent.body.systemInstruction.parts[0].text;
+assert.ok(sys.includes(openShift.title) && sys.includes('arizalarim'), 'kontekstda ochiq smenalar va ishchining arizalari');
+assert.ok(!/\+998/.test(sys), 'telefon raqamlar Gemini’ga yuborilmaydi');
+assert.equal(sent.body.contents.length, 2, 'tarixdan noto‘g‘ri rol tashlanadi');
+
+answer = said({ reply: 'Mana.', link: 'https://yomon.example' });
+assert.equal((await call('biz', '/ai', { text: 'yangi arizalar bormi?' })).data.link, '', 'begona havola o‘tmaydi');
+assert.ok(seen.at(-1).body.systemInstruction.parts[0].text.includes('smenalarim'), 'biznes kontekstida o‘z smenalari');
+
+busyModel = 'gemini-3.5-flash';
+assert.equal((await call('w', '/ai', { text: 'salom' })).data.reply, 'Mana.', 'asosiy model band: zaxira model javob beradi');
+assert.match(seen.at(-1).url, /\/gemini-3\.1-flash-lite:/);
+busyModel = '';
+
+answer = said({ heard: 'Bugungi ishlarni ayt', reply: 'Hozir aytaman.' });
+const voice = (await call('w', '/ai', { audio: WAV })).data;
+assert.equal(voice.heard, 'Bugungi ishlarni ayt', 'ovozli savol matni qaytadi');
+assert.equal(seen.at(-1).body.contents.at(-1).parts[0].inlineData.mimeType, 'audio/wav');
+
+answer = { candidates: [{ content: { parts: [{ inlineData: { mimeType: 'audio/L16;codec=pcm;rate=24000', data: Buffer.alloc(480).toString('base64') } }] } }] };
+const tts = await handle({ method: 'POST', path: '/api/ai/speak', cookie: jar.w, contentType: 'application/json', body: JSON.stringify({ text: 'Salom' }), https: false });
+assert.equal(tts.status, 200);
+assert.equal(tts.file!.type, 'audio/wav');
+assert.equal(Buffer.from(tts.file!.body).toString('latin1', 0, 4), 'RIFF', 'xom PCM WAV ga o‘raladi');
+assert.equal(tts.file!.body.byteLength, 44 + 480);
+
+answer = said({ reply: 'ok' });
+for (let i = 0; i < 15; i++) assert.equal(await from('10.0.9.1', '/ai', { text: 'salom' }), 200);
+assert.equal(await from('10.0.9.1', '/ai', { text: 'salom' }), 429, 'mehmonga 10 daqiqada 15 ta savol');
+assert.equal(await from('10.0.9.2', '/ai', { text: 'salom' }), 200, 'boshqa IP ochiq');
+fake.close();
 
 console.log('Hammasi joyida ✓');

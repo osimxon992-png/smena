@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import InstallButton from '@/components/InstallButton';
+import Farbo from '@/components/Farbo';
 import { api, type Me } from '@/lib/client';
 import Avatar from './Avatar';
 
@@ -93,6 +94,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </header>
           <main id="asosiy">{children}</main>
         </div>
+        <Farbo />
         <div className={`toast${note.show ? ' show' : ''}${note.isError ? ' error' : ''}`} role="status" aria-live="polite">{note.text}</div>
       </div>
     </AppContext.Provider>

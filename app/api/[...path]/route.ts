@@ -2,6 +2,8 @@ import { handle } from '../../../lib/api';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// Farbo (Gemini) javobi bir necha soniya, band paytda zaxira model bilan uzoqroq ketishi mumkin
+export const maxDuration = 60;
 
 // Barcha /api/* so'rovlari lib/api.ts dagi bitta yo'naltirgichga tushadi
 async function respond(req: Request) {
