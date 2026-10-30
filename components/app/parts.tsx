@@ -39,6 +39,19 @@ export const PhoneInput = () => (
   <div className="phone"><span>+998</span><input type="tel" name="phone" required inputMode="tel" autoComplete="tel-national" placeholder="90 123 45 67" /></div>
 );
 
+// Ro'yxatdagi rol, ism va biznes nomi maydonlari (biznes nomi faqat "Menga ishchi kerak" tanlanganda ko'rinadi)
+export const ProfileFields = ({ business, name }: { business: boolean; name?: string }) => (
+  <>
+    <fieldset className="roles">
+      <legend>Siz kimsiz?</legend>
+      <label><input type="radio" name="role" value="worker" defaultChecked={!business} /><span>Ish qidiryapman</span></label>
+      <label><input type="radio" name="role" value="business" defaultChecked={business} /><span>Menga ishchi kerak</span></label>
+    </fieldset>
+    <Field label="Ismingiz"><input name="name" required maxLength={60} autoComplete="name" defaultValue={name} /></Field>
+    <Field label="Biznes nomi" className="org"><input name="org" maxLength={80} placeholder="Bahor to‘yxonasi" /></Field>
+  </>
+);
+
 export function BlockedBanner() {
   const { me } = useApp();
   if (!me?.blocked) return null;

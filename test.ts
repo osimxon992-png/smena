@@ -1,8 +1,12 @@
 // API o'z-o'zini tekshirish: node test.ts (vaqtinchalik xotiradagi libSQL bazasi bilan)
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 
 process.env.TURSO_DATABASE_URL = ':memory:';
 process.env.ADMIN_PASSWORD = 'test-admin-parol';
+// Google tokenlarini sinov kaliti bilan imzolaymiz; server ochiq kalitni shu data: manzildan oladi
+const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+process.env.FIREBASE_KEYS_URL = 'data:application/json,' + encodeURIComponent(JSON.stringify({ keys: [{ ...publicKey.export({ format: 'jwk' }), kid: 'sinov', alg: 'RS256' }] }));
 // Baza manzili import paytida o'qiladi, shuning uchun api muhit o'rnatilgandan keyin yuklanadi
 const { handle } = await import('./lib/api.ts');
 
@@ -138,5 +142,39 @@ for (let i = 0; i < 9; i++) assert.equal(await from(`10.0.4.${i}`, '/login', wro
 for (let i = 0; i < 5; i++) assert.equal(await from('10.0.5.1', '/admin/login', { password: 'xato' }), 401);
 assert.equal(await from('10.0.5.1', '/admin/login', { password: 'test-admin-parol' }), 429, 'admin: bitta IPdan 5 ta xato');
 assert.equal(await from('10.0.5.2', '/admin/login', { password: 'test-admin-parol' }), 200, 'admin: boshqa IP ochiq');
+
+// Google orqali kirish
+const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+function googleToken(uid: string, claims: object = {}, kid = 'sinov') {
+  const t = Math.floor(Date.now() / 1000);
+  const signed = `${b64({ alg: 'RS256', kid })}.${b64({
+    iss: 'https://securetoken.google.com/smena-855fd', aud: 'smena-855fd', sub: uid, iat: t, exp: t + 3600,
+    name: 'Gulnora Karimova', firebase: { sign_in_provider: 'google.com' }, ...claims,
+  })}`;
+  return `${signed}.${crypto.sign('RSA-SHA256', Buffer.from(signed), privateKey).toString('base64url')}`;
+}
+const tok = googleToken('uid-1');
+assert.deepEqual((await call('g', '/google', { idToken: tok })).data, { signup: { name: 'Gulnora Karimova' } }, 'yangi Google hisobi: avval ro‘yxat');
+assert.equal((await call('g', '/me')).data, null, 'ro‘yxatni yakunlamasdan sessiya yo‘q');
+assert.equal(await status('g', '/google', { idToken: tok, role: 'worker', name: 'Gulnora', phone: '935550002' }), 409, 'band raqam');
+assert.equal(await status('g', '/google', { idToken: tok, role: 'business', name: 'Gulnora', phone: '935557001' }), 400, 'biznes nomisiz');
+const gUser = (await call('g', '/google', { idToken: tok, role: 'worker', name: 'Gulnora', phone: '935557001' })).data;
+assert.equal(gUser.name, 'Gulnora');
+assert.equal((await call('g', '/me')).data.id, gUser.id, 'ro‘yxatdan keyin kirgan');
+assert.equal((await call('g2', '/google', { idToken: googleToken('uid-1') })).data.id, gUser.id, 'keyingi safar darhol kiradi');
+assert.equal(await status('g3', '/login', { phone: '935557001', password: '' }), 401, 'Google hisobiga parol bilan kirib bo‘lmaydi');
+const now = Math.floor(Date.now() / 1000);
+for (const [bad, why] of [
+  [googleToken('uid-2', { aud: 'boshqa-loyiha' }), 'boshqa Firebase loyihasi'],
+  [googleToken('uid-2', { iss: 'https://securetoken.google.com/boshqa' }), 'boshqa iss'],
+  [googleToken('uid-2', { exp: now - 10 }), 'muddati o‘tgan'],
+  [googleToken('uid-2', { firebase: { sign_in_provider: 'password' } }), 'Google emas'],
+  [googleToken('uid-2', { sub: '' }), 'uid yo‘q'],
+  [googleToken('uid-2', {}, 'nomalum'), 'noma’lum kalit'],
+  [tok.slice(0, -6) + 'AAAAAA', 'imzo buzilgan'],
+  [`${tok.split('.')[0]}.${b64({ sub: 'uid-1' })}.${tok.split('.')[2]}`, 'ma’lumot almashtirilgan'],
+  ['abc', 'token emas'],
+  [undefined, 'token yo‘q'],
+] as const) assert.equal(await status('g4', '/google', { idToken: bad }), 401, why);
 
 console.log('Hammasi joyida ✓');

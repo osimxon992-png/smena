@@ -58,7 +58,11 @@ const ready = db.executeMultiple(`
     at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS login_fails_key ON login_fails (key, at);
-`);
+`).then(async () => {
+  // Google orqali kirganlarning Firebase uid'i. SQLite'da "ADD COLUMN IF NOT EXISTS" yo'q: ustun bor bo'lsa xatoni o'tkazib yuboramiz
+  await exec('ALTER TABLE users ADD COLUMN firebase_uid TEXT').catch((e) => { if (!/duplicate column/i.test(String(e?.message))) throw e; });
+  await exec('CREATE UNIQUE INDEX IF NOT EXISTS users_firebase_uid ON users (firebase_uid)');
+});
 
 // libSQL qatorlari massivga o'xshash obyekt: JSON uchun oddiy {ustun: qiymat} ga aylantiramiz
 const plain = (rs: ResultSet) => rs.rows.map((r) => Object.fromEntries(rs.columns.map((c, i) => [c, r[i]])) as Row);
@@ -159,23 +163,76 @@ async function startSession(ctx: Ctx, userId: number) {
   return profile((await one('SELECT * FROM users WHERE id = ?', userId))!);
 }
 
-async function register(ctx: Ctx) {
+// firebaseUid bo'lsa (Google orqali), parol so'ralmaydi
+async function createUser(ctx: Ctx, firebaseUid: string | null = null) {
   const { body } = ctx;
   const role = ['worker', 'business'].includes(body.role) ? body.role : fail(400, 'Kimligingizni tanlang');
   const name = str(body.name, 2, 60, 'Ism');
   const org = role === 'business' ? str(body.org, 2, 80, 'Biznes nomi') : null;
   const p = phone(body.phone);
   const password = typeof body.password === 'string' ? body.password : '';
-  if (password.length < 6 || password.length > 100) fail(400, 'Parol kamida 6 belgidan iborat bo‘lsin');
+  if (!firebaseUid && (password.length < 6 || password.length > 100)) fail(400, 'Parol kamida 6 belgidan iborat bo‘lsin');
   const taken = 'Bu raqam bilan ro‘yxatdan o‘tilgan. Kirish sahifasidan kiring';
   if (await one('SELECT 1 FROM users WHERE phone = ?', p)) fail(409, taken);
   try {
-    const { lastInsertRowid } = await exec('INSERT INTO users (role, phone, name, org, pass) VALUES (?, ?, ?, ?, ?)', role, p, name, org, hash(password));
+    // Google hisobida parol yo'q: tasodifiy parol xeshi telefon+parol bilan kirishni yopiq tutadi
+    const { lastInsertRowid } = await exec(
+      'INSERT INTO users (role, phone, name, org, pass, firebase_uid) VALUES (?, ?, ?, ?, ?, ?)',
+      role, p, name, org, hash(firebaseUid ? crypto.randomBytes(32).toString('hex') : password), firebaseUid,
+    );
     return startSession(ctx, Number(lastInsertRowid));
   } catch (e) {
     if (isUnique(e)) fail(409, taken);
     throw e;
   }
+}
+
+const register = (ctx: Ctx) => createUser(ctx);
+
+// --- Google orqali kirish (Firebase Auth) ---
+// Brauzer Firebase'dan ID token oladi; server uni Google'ning ochiq kalitlari bilan o'zi tekshiradi (firebase-admin kerak emas).
+// https://firebase.google.com/docs/auth/admin/verify-id-tokens#verify_id_tokens_using_a_third-party_jwt_library
+const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT_ID || 'smena-855fd';
+// test.ts o'z kalitini data: manzil orqali beradi
+const keysUrl = () => process.env.FIREBASE_KEYS_URL || 'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
+let keyCache: { keys: Row[]; at: number } = { keys: [], at: 0 };
+
+async function googleKey(kid: string) {
+  const find = () => keyCache.keys.find((k) => k.kid === kid);
+  const age = Date.now() - keyCache.at;
+  // Google kalitlarni vaqti-vaqti bilan almashtiradi: 6 soatda bir yangilaymiz, noma'lum kid kelsa daqiqasiga ko'pi bilan bir marta
+  if (age > 6 * 3600_000 || (!find() && age > 60_000)) {
+    const res = await fetch(keysUrl()).catch(() => null);
+    if (!res?.ok) fail(502, 'Google bilan bog‘lanib bo‘lmadi. Birozdan keyin qayta urinib ko‘ring');
+    keyCache = { keys: (await res!.json()).keys ?? [], at: Date.now() };
+  }
+  return find();
+}
+
+function badToken(): never { fail(401, 'Google orqali kirish tasdiqlanmadi. Qayta urinib ko‘ring'); }
+const jwtPart = (s: string) => { try { return JSON.parse(Buffer.from(s, 'base64url').toString()) as Row; } catch { return null; } };
+
+async function googleUser(idToken: unknown) {
+  const [h, p, s, extra] = typeof idToken === 'string' ? idToken.split('.') : [];
+  const header = h ? jwtPart(h) : null, claims = p ? jwtPart(p) : null;
+  if (!s || extra !== undefined || header?.alg !== 'RS256' || typeof header.kid !== 'string' || !claims) badToken();
+  const key = await googleKey(header.kid) || badToken();
+  const signed = crypto.verify('RSA-SHA256', Buffer.from(`${h}.${p}`), crypto.createPublicKey({ key: key as crypto.JsonWebKey, format: 'jwk' }), Buffer.from(s, 'base64url'));
+  const t = Date.now() / 1000;
+  if (!signed || claims.aud !== FIREBASE_PROJECT || claims.iss !== `https://securetoken.google.com/${FIREBASE_PROJECT}`
+    || !(claims.exp > t) || !(claims.iat < t + 300) || typeof claims.sub !== 'string' || !claims.sub
+    || claims.firebase?.sign_in_provider !== 'google.com') badToken();
+  return { uid: claims.sub as string, name: typeof claims.name === 'string' ? claims.name.slice(0, 60) : '' };
+}
+
+// Hisob bo'lsa kiradi. Birinchi marta bo'lsa {signup} qaytadi: brauzer rol, ism va telefonni so'rab, shu token bilan qayta yuboradi
+// (telefon kerak: smenaga qabul qilingach biznes ishchiga shu raqam orqali bog'lanadi)
+async function google(ctx: Ctx) {
+  const g = await googleUser(ctx.body.idToken);
+  const u = await one('SELECT id FROM users WHERE firebase_uid = ?', g.uid);
+  if (u) return startSession(ctx, u.id);
+  if (ctx.body.role === undefined) return { signup: { name: g.name } };
+  return createUser(ctx, g.uid);
 }
 
 // Parol tanlashni cheklash: 15 daqiqada noto'g'ri urinishlar soni [kalit, ruxsat] dan oshsa, 429.
@@ -527,6 +584,7 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['POST', /^\/api\/admin\/users\/(\d+)$/, adminSetBlocked],
   ['POST', /^\/api\/register$/, register],
   ['POST', /^\/api\/login$/, login],
+  ['POST', /^\/api\/google$/, google],
   ['POST', /^\/api\/logout$/, logout],
   ['GET', /^\/api\/me$/, ({ user }) => user && profile(user)],
   ['GET', /^\/api\/shifts$/, listShifts],

@@ -421,6 +421,9 @@ html.lenis, html.lenis body { height: auto; }
 .phone input { border-radius: 0 6px 6px 0; }
 .form-error { margin: 0; color: var(--red); font-weight: 600; }
 .form-error:empty { display: none; }
+.btn-google { gap: 12px; }
+.form .or { display: flex; align-items: center; gap: 12px; margin: 0; color: var(--ink-soft); font-size: .92rem; }
+.form .or::before, .form .or::after { content: ""; flex: 1; border-top: 2px solid currentColor; opacity: .3; }
 .roles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0; padding: 0; border: 0; }
 .roles legend { margin-bottom: 6px; padding: 0; font-weight: 600; }
 .roles label { position: relative; }
