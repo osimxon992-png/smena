@@ -70,6 +70,19 @@ export default function Detail({ target, onOpen, onClose, onChanged }: { target:
     try { done(await api(path, body)); load(); onChanged(); } catch (e) { setError((e as Error).message); }
   }
 
+  // Butunlay o'chirish qaytarib bo'lmaydi: ism bilan tasdiqlatamiz, keyin oyna yopilib ro'yxat yangilanadi
+  async function removeUser(u: UserCard['user'], what: string) {
+    if (!confirm(`${u.name} butunlay o‘chirilsinmi? Uning ${what}, rasmi va kirishlari ham o‘chadi. Buni qaytarib bo‘lmaydi.`)) return;
+    setError('');
+    try {
+      await api(`/admin/users/${u.id}/delete`, {});
+      onChanged();
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   let content: React.ReactNode = <p className="muted">Yuklanmoqda…</p>;
   if (card && 'user' in card) {
     const { user: u, sessions, applications, shifts } = card;
@@ -100,6 +113,9 @@ export default function Detail({ target, onOpen, onClose, onChanged }: { target:
           <button type="button" className="btn btn-ghost btn-sm" disabled={!sessions.active}
             onClick={() => act(`/admin/users/${u.id}/logout`, {}, (r) => setNote(`${r.ended} ta kirish yopildi`))}>
             Barcha kirishlarni yopish
+          </button>
+          <button type="button" className="btn btn-danger btn-sm" onClick={() => removeUser(u, u.role === 'worker' ? `${applications.length} ta arizasi` : `${shifts.length} ta smenasi va ularga berilgan arizalar`)}>
+            Foydalanuvchini o‘chirish
           </button>
         </div>
         {temp && (

@@ -391,4 +391,20 @@ assert.equal((await call('adm2', '/admin/demo', { action: 'remove' })).data.remo
 assert.equal((await call('guest', '/shifts')).data.filter((s: any) => s.demo).length, 0);
 assert.ok(!(await call('adm2', '/admin/overview')).data.users.some((u: any) => u.phone.startsWith('+99800000000')), 'demo bizneslar ham o‘chdi');
 
+// Admin foydalanuvchini o'chiradi: ishchi bilan arizalari, biznes bilan smenalari va ularning arizalari
+const pId = (await call('p2', '/me')).data.id;
+const pApps = (await call('biz', `/shifts/${biz3}`)).data.applicants.length;
+assert.equal(await status('w', `/admin/users/${pId}/delete`, {}), 401, 'faqat admin o‘chiradi');
+assert.equal(await status('adm2', '/admin/users/99999/delete', {}), 404);
+assert.equal((await call('adm2', `/admin/users/${pId}/delete`, {})).data.applications, 1);
+assert.equal((await call('p2', '/me')).data, null, 'o‘chirilgan foydalanuvchining kirishi yopildi');
+assert.equal(await status('p3', '/login', { phone: '935558001', password: 'yangi123' }), 401);
+assert.equal((await call('biz', `/shifts/${biz3}`)).data.applicants.length, pApps - 1, 'arizasi ham o‘chdi');
+assert.equal(await status('p4', '/register', { role: 'worker', phone: '935558001', name: 'Qayta', password: 'secret1', phoneToken: sms('935558001') }), 200, 'raqam bo‘shadi');
+const bizId = (await call('biz', '/me')).data.id;
+const del = (await call('adm2', `/admin/users/${bizId}/delete`, {})).data;
+assert.ok(del.shifts >= 3, 'biznesning smenalari ham o‘chdi');
+assert.ok(!(await call('guest', '/shifts')).data.some((x: any) => x.org === 'Bahor to‘yxonasi'), 'smenalari ro‘yxatda yo‘q');
+assert.ok(!(await call('adm2', '/admin/overview')).data.users.some((u: any) => u.id === bizId));
+
 console.log('Hammasi joyida ✓');

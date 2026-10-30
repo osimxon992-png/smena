@@ -1025,6 +1025,24 @@ async function adminEndSessions(ctx: Ctx) {
   return { ended: rowsAffected };
 }
 
+// Foydalanuvchini butunlay o'chirish: kirishlari, rasmi, arizalari; biznes bo'lsa smenalari va ularga berilgan arizalar ham.
+// Qaytarib bo'lmaydi. Raqam bo'shaydi: shu raqam bilan qayta ro'yxatdan o'tish mumkin
+async function adminDeleteUser(ctx: Ctx) {
+  needAdmin(ctx);
+  const u = await one('SELECT id, phone FROM users WHERE id = ?', ctx.id) || fail(404, 'Foydalanuvchi topilmadi');
+  const own = '(SELECT id FROM shifts WHERE business_id = ?)';
+  const [apps, shifts] = await db.batch([
+    { sql: `DELETE FROM applications WHERE worker_id = ? OR shift_id IN ${own}`, args: [u.id, u.id] },
+    { sql: 'DELETE FROM shifts WHERE business_id = ?', args: [u.id] },
+    { sql: 'DELETE FROM sessions WHERE user_id = ?', args: [u.id] },
+    { sql: 'DELETE FROM photos WHERE user_id = ?', args: [u.id] },
+    { sql: 'DELETE FROM ai_calls WHERE key IN (?, ?)', args: [`ai:u${u.id}`, `tts:u${u.id}`] },
+    { sql: 'DELETE FROM login_fails WHERE key = ?', args: [`phone:${u.phone}`] },
+    { sql: 'DELETE FROM users WHERE id = ?', args: [u.id] },
+  ], 'write');
+  return { deleted: true, applications: apps.rowsAffected, shifts: shifts.rowsAffected };
+}
+
 // Obunani o'zgartirish: { plan: 'free' } yoki { plan: 'pro', months: 1 | 3 | 6 | 12 | 0 (muddatsiz) }.
 // Amaldagi Pro uzaytirilsa, muddat uning tugash sanasidan qo'shiladi. To'lov tizimi yo'q: admin to'lovni olib, shu yerda yoqadi
 async function adminSetPlan(ctx: Ctx) {
@@ -1117,6 +1135,7 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['POST', /^\/api\/admin\/users\/(\d+)\/password$/, adminResetPassword],
   ['POST', /^\/api\/admin\/users\/(\d+)\/logout$/, adminEndSessions],
   ['POST', /^\/api\/admin\/users\/(\d+)\/plan$/, adminSetPlan],
+  ['POST', /^\/api\/admin\/users\/(\d+)\/delete$/, adminDeleteUser],
   ['GET', /^\/api\/admin\/shifts\/(\d+)$/, adminShift],
   ['POST', /^\/api\/admin\/login$/, adminLogin],
   ['POST', /^\/api\/admin\/logout$/, adminLogout],
