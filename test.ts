@@ -183,6 +183,11 @@ assert.equal(await status('g', '/google', { idToken: tok, role: 'worker', name: 
 assert.equal(await status('g', '/google', { idToken: tok, role: 'business', name: 'Gulnora', phone: '935557001', phoneToken: sms('935557001') }), 400, 'biznes nomisiz');
 const gUser = (await call('g', '/google', { idToken: tok, role: 'worker', name: 'Gulnora', phone: '935557001', phoneToken: sms('935557001') })).data;
 assert.equal(gUser.name, 'Gulnora');
+assert.equal((await call('g', '/me')).data.first_name, 'Gulnora', 'Google ismi profilga yoziladi');
+const g2tok = googleToken('uid-3', { name: 'Aziz Karimov', picture: 'https://yomon.example/rasm.jpg' });
+const g2 = (await call('g5', '/google', { idToken: g2tok, role: 'worker', name: 'Aziz Karimov', phone: '935557002', phoneToken: sms('935557002') })).data;
+assert.deepEqual([g2.first_name, g2.last_name], ['Aziz', 'Karimov'], 'ism va familiya ajratiladi');
+assert.equal(g2.photo, null, 'Google serveridan bo‘lmagan rasm olinmaydi');
 assert.equal((await call('g', '/me')).data.id, gUser.id, 'ro‘yxatdan keyin kirgan');
 assert.equal((await call('g2', '/google', { idToken: googleToken('uid-1') })).data.id, gUser.id, 'keyingi safar darhol kiradi');
 assert.equal(await status('g3', '/login', { phone: '935557001', password: '' }), 401, 'Google hisobiga parol bilan kirib bo‘lmaydi');

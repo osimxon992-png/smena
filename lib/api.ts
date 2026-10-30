@@ -309,16 +309,21 @@ async function registerCheck({ body }: Ctx) {
 }
 
 // Raqam SMS kod bilan tasdiqlangan bo'lishi shart (phoneToken). firebaseUid bo'lsa (Google orqali), parol so'ralmaydi
-async function createUser(ctx: Ctx, firebaseUid: string | null = null) {
+// va Google profil rasmi (photoUrl) profilga olinadi. Ism profil uchun ism va familiyaga ajratiladi
+async function createUser(ctx: Ctx, firebaseUid: string | null = null, photoUrl = '') {
   const f = userFields(ctx.body, !firebaseUid);
+  const [first, ...rest] = f.name.split(/\s+/);
+  const fit = (x: string) => (x.length >= 2 && x.length <= 30 ? x : null);
   if (await one('SELECT 1 FROM users WHERE phone = ?', f.phone)) fail(409, PHONE_TAKEN);
   if (await verifiedPhone(ctx.body.phoneToken) !== f.phone) fail(400, 'Kod boshqa raqamga yuborilgan. Raqamni tekshirib, kodni qayta oling');
   try {
     // Google hisobida parol yo'q: tasodifiy parol xeshi telefon+parol bilan kirishni yopiq tutadi
     const { lastInsertRowid } = await exec(
-      'INSERT INTO users (role, phone, name, org, pass, firebase_uid) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO users (role, phone, name, org, pass, firebase_uid, first_name, last_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       f.role, f.phone, f.name, f.org, hash(firebaseUid ? crypto.randomBytes(32).toString('hex') : f.password), firebaseUid,
+      fit(first), fit(rest.join(' ')),
     );
+    if (photoUrl) await importGooglePhoto(Number(lastInsertRowid), photoUrl);
     return startSession(ctx, Number(lastInsertRowid));
   } catch (e) {
     if (isUnique(e)) fail(409, PHONE_TAKEN);
@@ -367,7 +372,30 @@ async function firebaseClaims(idToken: unknown, provider: 'google.com' | 'phone'
 
 async function googleUser(idToken: unknown) {
   const claims = await firebaseClaims(idToken, 'google.com');
-  return { uid: claims.sub as string, name: typeof claims.name === 'string' ? claims.name.slice(0, 60) : '' };
+  return {
+    uid: claims.sub as string,
+    name: typeof claims.name === 'string' ? claims.name.slice(0, 60) : '',
+    picture: typeof claims.picture === 'string' ? claims.picture : '',
+  };
+}
+
+// Google profil rasmini profilga oladi: faqat Google rasm serveridan (https://*.googleusercontent.com), 320 px JPEG.
+// Olinmasa (tarmoq, boshqa format) jim o'tkaziladi: ro'yxat to'xtamaydi, foydalanuvchi rasmni o'zi yuklaydi
+async function importGooglePhoto(userId: number, url: string) {
+  let src: URL;
+  try { src = new URL(url); } catch { return; }
+  if (src.protocol !== 'https:' || !/(^|\.)googleusercontent\.com$/.test(src.hostname)) return;
+  // Manzil oxiridagi o'lcham ("=s96-c") o'rniga: 320 px, kvadrat, JPEG
+  src.pathname = src.pathname.replace(/=[\w-]*$/, '') + '=s320-c-rj';
+  const res = await fetch(src, { redirect: 'error', signal: AbortSignal.timeout(5000) }).catch(() => null);
+  if (!res?.ok) return;
+  const data = Buffer.from(await res.arrayBuffer());
+  if (data.length < 100 || data.length > 200_000 || data[0] !== 0xff || data[1] !== 0xd8 || data[2] !== 0xff) return;
+  await exec(
+    `INSERT INTO photos (user_id, data, updated_at) VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+     ON CONFLICT (user_id) DO NOTHING`,
+    userId, data,
+  );
 }
 
 // SMS kod bilan tasdiqlangan raqam (+998...). Kod so'nggi 10 daqiqada kiritilgan bo'lishi kerak: eski token qayta ishlatilmaydi
@@ -384,7 +412,7 @@ async function google(ctx: Ctx) {
   const u = await one('SELECT id FROM users WHERE firebase_uid = ?', g.uid);
   if (u) return startSession(ctx, u.id);
   if (ctx.body.role === undefined) return { signup: { name: g.name } };
-  return createUser(ctx, g.uid);
+  return createUser(ctx, g.uid, g.picture);
 }
 
 // SMS bilan kirish: avval raqam ro'yxatda borligini tekshiramiz (SMS behuda ketmasin), keyin tasdiqlangan raqam bilan kiramiz
