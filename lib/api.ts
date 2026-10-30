@@ -274,33 +274,48 @@ async function startSession(ctx: Ctx, userId: number) {
   return profile((await one('SELECT * FROM users WHERE id = ?', userId))!);
 }
 
-// firebaseUid bo'lsa (Google orqali), parol so'ralmaydi
-async function createUser(ctx: Ctx, firebaseUid: string | null = null) {
-  const { body } = ctx;
-  const role = ['worker', 'business'].includes(body.role) ? body.role : fail(400, 'Kimligingizni tanlang');
+// Ro'yxat maydonlari. Google orqali ro'yxatda (withPassword = false) parol so'ralmaydi
+function userFields(body: Row, withPassword: boolean) {
+  const role = ['worker', 'business'].includes(body.role) ? body.role as User['role'] : fail(400, 'Kimligingizni tanlang');
   const name = str(body.name, 2, 60, 'Ism');
   const org = role === 'business' ? str(body.org, 2, 80, 'Biznes nomi') : null;
   const p = phone(body.phone);
   const password = typeof body.password === 'string' ? body.password : '';
-  if (!firebaseUid && (password.length < 6 || password.length > 100)) fail(400, 'Parol kamida 6 belgidan iborat bo‘lsin');
-  const taken = 'Bu raqam bilan ro‘yxatdan o‘tilgan. Kirish sahifasidan kiring';
-  if (await one('SELECT 1 FROM users WHERE phone = ?', p)) fail(409, taken);
+  if (withPassword && (password.length < 6 || password.length > 100)) fail(400, 'Parol kamida 6 belgidan iborat bo‘lsin');
+  return { role, name, org, phone: p, password };
+}
+
+const PHONE_TAKEN = 'Bu raqam bilan ro‘yxatdan o‘tilgan. Kirish sahifasidan kiring';
+const NOT_FOUND = 'Bu raqam ro‘yxatdan o‘tmagan. Avval ro‘yxatdan o‘ting';
+
+// SMS yuborishdan oldin: maydonlar to'g'ri va raqam bo'sh ekanini tekshiradi, SMS behuda ketmasin
+async function registerCheck({ body }: Ctx) {
+  const f = userFields(body, body.google !== true);
+  if (await one('SELECT 1 FROM users WHERE phone = ?', f.phone)) fail(409, PHONE_TAKEN);
+  return { phone: f.phone };
+}
+
+// Raqam SMS kod bilan tasdiqlangan bo'lishi shart (phoneToken). firebaseUid bo'lsa (Google orqali), parol so'ralmaydi
+async function createUser(ctx: Ctx, firebaseUid: string | null = null) {
+  const f = userFields(ctx.body, !firebaseUid);
+  if (await one('SELECT 1 FROM users WHERE phone = ?', f.phone)) fail(409, PHONE_TAKEN);
+  if (await verifiedPhone(ctx.body.phoneToken) !== f.phone) fail(400, 'Kod boshqa raqamga yuborilgan. Raqamni tekshirib, kodni qayta oling');
   try {
     // Google hisobida parol yo'q: tasodifiy parol xeshi telefon+parol bilan kirishni yopiq tutadi
     const { lastInsertRowid } = await exec(
       'INSERT INTO users (role, phone, name, org, pass, firebase_uid) VALUES (?, ?, ?, ?, ?, ?)',
-      role, p, name, org, hash(firebaseUid ? crypto.randomBytes(32).toString('hex') : password), firebaseUid,
+      f.role, f.phone, f.name, f.org, hash(firebaseUid ? crypto.randomBytes(32).toString('hex') : f.password), firebaseUid,
     );
     return startSession(ctx, Number(lastInsertRowid));
   } catch (e) {
-    if (isUnique(e)) fail(409, taken);
+    if (isUnique(e)) fail(409, PHONE_TAKEN);
     throw e;
   }
 }
 
 const register = (ctx: Ctx) => createUser(ctx);
 
-// --- Google orqali kirish (Firebase Auth) ---
+// --- Firebase Auth: Google orqali kirish va SMS kod bilan telefonni tasdiqlash ---
 // Brauzer Firebase'dan ID token oladi; server uni Google'ning ochiq kalitlari bilan o'zi tekshiradi (firebase-admin kerak emas).
 // https://firebase.google.com/docs/auth/admin/verify-id-tokens#verify_id_tokens_using_a_third-party_jwt_library
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT_ID || 'smena-855fd';
@@ -320,30 +335,55 @@ async function googleKey(kid: string) {
   return find();
 }
 
-function badToken(): never { fail(401, 'Google orqali kirish tasdiqlanmadi. Qayta urinib ko‘ring'); }
 const jwtPart = (s: string) => { try { return JSON.parse(Buffer.from(s, 'base64url').toString()) as Row; } catch { return null; } };
 
-async function googleUser(idToken: unknown) {
+// Imzosi, loyihasi, muddati va kirish usuli (google.com yoki phone) to'g'ri bo'lsa, token ma'lumotlarini qaytaradi
+async function firebaseClaims(idToken: unknown, provider: 'google.com' | 'phone') {
+  const bad = (): never => fail(401, provider === 'phone' ? 'Raqam tasdiqlanmadi. Kodni qayta oling' : 'Google orqali kirish tasdiqlanmadi. Qayta urinib ko‘ring');
   const [h, p, s, extra] = typeof idToken === 'string' ? idToken.split('.') : [];
   const header = h ? jwtPart(h) : null, claims = p ? jwtPart(p) : null;
-  if (!s || extra !== undefined || header?.alg !== 'RS256' || typeof header.kid !== 'string' || !claims) badToken();
-  const key = await googleKey(header.kid) || badToken();
+  if (!s || extra !== undefined || header?.alg !== 'RS256' || typeof header.kid !== 'string' || !claims) return bad();
+  const key = await googleKey(header.kid) || bad();
   const signed = crypto.verify('RSA-SHA256', Buffer.from(`${h}.${p}`), crypto.createPublicKey({ key: key as crypto.JsonWebKey, format: 'jwk' }), Buffer.from(s, 'base64url'));
   const t = Date.now() / 1000;
   if (!signed || claims.aud !== FIREBASE_PROJECT || claims.iss !== `https://securetoken.google.com/${FIREBASE_PROJECT}`
     || !(claims.exp > t) || !(claims.iat < t + 300) || typeof claims.sub !== 'string' || !claims.sub
-    || claims.firebase?.sign_in_provider !== 'google.com') badToken();
+    || claims.firebase?.sign_in_provider !== provider) return bad();
+  return claims;
+}
+
+async function googleUser(idToken: unknown) {
+  const claims = await firebaseClaims(idToken, 'google.com');
   return { uid: claims.sub as string, name: typeof claims.name === 'string' ? claims.name.slice(0, 60) : '' };
 }
 
-// Hisob bo'lsa kiradi. Birinchi marta bo'lsa {signup} qaytadi: brauzer rol, ism va telefonni so'rab, shu token bilan qayta yuboradi
-// (telefon kerak: smenaga qabul qilingach biznes ishchiga shu raqam orqali bog'lanadi)
+// SMS kod bilan tasdiqlangan raqam (+998...). Kod so'nggi 10 daqiqada kiritilgan bo'lishi kerak: eski token qayta ishlatilmaydi
+async function verifiedPhone(idToken: unknown) {
+  const claims = await firebaseClaims(idToken, 'phone');
+  if (!(Date.now() / 1000 - claims.auth_time < 600) || typeof claims.phone_number !== 'string') fail(401, 'Kod muddati o‘tdi. Kodni qayta oling');
+  return claims.phone_number as string;
+}
+
+// Hisob bo'lsa kiradi. Birinchi marta bo'lsa {signup} qaytadi: brauzer rol, ism va telefonni so'rab (telefon SMS bilan tasdiqlanadi),
+// shu token bilan qayta yuboradi (telefon kerak: smenaga qabul qilingach biznes ishchiga shu raqam orqali bog'lanadi)
 async function google(ctx: Ctx) {
   const g = await googleUser(ctx.body.idToken);
   const u = await one('SELECT id FROM users WHERE firebase_uid = ?', g.uid);
   if (u) return startSession(ctx, u.id);
   if (ctx.body.role === undefined) return { signup: { name: g.name } };
   return createUser(ctx, g.uid);
+}
+
+// SMS bilan kirish: avval raqam ro'yxatda borligini tekshiramiz (SMS behuda ketmasin), keyin tasdiqlangan raqam bilan kiramiz
+async function loginCheck({ body }: Ctx) {
+  const p = phone(body.phone);
+  if (!(await one('SELECT 1 FROM users WHERE phone = ?', p))) fail(404, NOT_FOUND);
+  return { phone: p };
+}
+
+async function smsLogin(ctx: Ctx) {
+  const u = await one('SELECT id FROM users WHERE phone = ?', await verifiedPhone(ctx.body.phoneToken)) || fail(404, NOT_FOUND);
+  return startSession(ctx, u.id);
 }
 
 // Parol tanlashni cheklash: 15 daqiqada noto'g'ri urinishlar soni [kalit, ruxsat] dan oshsa, 429.
@@ -703,7 +743,10 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['GET', /^\/api\/admin\/me$/, (ctx) => ({ enabled: !!process.env.ADMIN_PASSWORD, admin: isAdmin(ctx.cookieHeader) })],
   ['GET', /^\/api\/admin\/overview$/, adminOverview],
   ['POST', /^\/api\/admin\/users\/(\d+)$/, adminSetBlocked],
+  ['POST', /^\/api\/register\/check$/, registerCheck],
   ['POST', /^\/api\/register$/, register],
+  ['POST', /^\/api\/login\/check$/, loginCheck],
+  ['POST', /^\/api\/login\/sms$/, smsLogin],
   ['POST', /^\/api\/login$/, login],
   ['POST', /^\/api\/google$/, google],
   ['POST', /^\/api\/logout$/, logout],

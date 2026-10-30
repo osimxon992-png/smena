@@ -18,6 +18,19 @@ async function call(who: string, path: string, body?: object, contentType = 'app
 }
 const status = async (who: string, path: string, body?: object) => (await call(who, path, body)).status;
 
+// Firebase tokenlari (Google va SMS) sinov kaliti bilan imzolanadi
+const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+function firebaseToken(claims: object, kid = 'sinov') {
+  const t = Math.floor(Date.now() / 1000);
+  const signed = `${b64({ alg: 'RS256', kid })}.${b64({ iss: 'https://securetoken.google.com/smena-855fd', aud: 'smena-855fd', iat: t, exp: t + 3600, auth_time: t, ...claims })}`;
+  return `${signed}.${crypto.sign('RSA-SHA256', Buffer.from(signed), privateKey).toString('base64url')}`;
+}
+const googleToken = (uid: string, claims: object = {}, kid = 'sinov') =>
+  firebaseToken({ sub: uid, name: 'Gulnora Karimova', firebase: { sign_in_provider: 'google.com' }, ...claims }, kid);
+// SMS kod bilan tasdiqlangan raqam
+const e164 = (phone: string) => { const d = phone.replace(/\D/g, ''); return '+' + (d.length === 9 ? '998' + d : d); };
+const sms = (phone: string, claims: object = {}) => firebaseToken({ sub: 'sms' + e164(phone), phone_number: e164(phone), firebase: { sign_in_provider: 'phone' }, ...claims });
+
 // Ariza berish va smena e'lon qilish uchun profil to'liq bo'lishi kerak (ishchida rasm ham)
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200)]).toString('base64');
 async function fill(who: string) {
@@ -33,10 +46,10 @@ async function fill(who: string) {
 const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Tashkent' });
 const shift = { title: 'Ofitsiant', place: 'Chilonzor 9', date: today, start: '23:59', end: '23:59', pay: 250000, slots: 1 };
 
-assert.equal(await status('biz', '/register', { role: 'business', phone: '90 123 45 67', name: 'Aziz', org: 'Bahor to‘yxonasi', password: 'secret1' }), 200);
-assert.equal(await status('w', '/register', { role: 'worker', phone: '+998 93 111 22 33', name: 'Dilnoza', password: 'secret1' }), 200);
-assert.equal(await status('x', '/register', { role: 'worker', phone: '931112233', name: 'Boshqa', password: 'secret1' }), 409, 'bir raqam ikki marta');
-assert.equal(await status('x', '/register', { role: 'business', phone: '931112299', name: 'Org yo‘q', password: 'secret1' }), 400, 'biznes nomisiz');
+assert.equal(await status('biz', '/register', { role: 'business', phone: '90 123 45 67', name: 'Aziz', org: 'Bahor to‘yxonasi', password: 'secret1', phoneToken: sms('90 123 45 67') }), 200);
+assert.equal(await status('w', '/register', { role: 'worker', phone: '+998 93 111 22 33', name: 'Dilnoza', password: 'secret1', phoneToken: sms('+998 93 111 22 33') }), 200);
+assert.equal(await status('x', '/register', { role: 'worker', phone: '931112233', name: 'Boshqa', password: 'secret1', phoneToken: sms('931112233') }), 409, 'bir raqam ikki marta');
+assert.equal(await status('x', '/register', { role: 'business', phone: '931112299', name: 'Org yo‘q', password: 'secret1', phoneToken: sms('931112299') }), 400, 'biznes nomisiz');
 
 assert.equal(await status('w', '/shifts', shift), 403, 'ishchi smena ochmaydi');
 assert.equal((await call('biz', '/me')).data.complete, false, 'yangi hisob: profil to‘ldirilmagan');
@@ -57,7 +70,7 @@ let detail = (await call('biz', `/shifts/${shiftId}`)).data;
 const appId = detail.applicants[0].id;
 assert.equal(detail.applicants[0].phone, null, 'raqam qabulgacha yopiq');
 
-await call('biz2', '/register', { role: 'business', phone: '901112233', name: 'Begona', org: 'Begona MChJ', password: 'secret1' });
+await call('biz2', '/register', { role: 'business', phone: '901112233', name: 'Begona', org: 'Begona MChJ', password: 'secret1', phoneToken: sms('901112233') });
 assert.equal(await status('biz2', `/applications/${appId}`, { action: 'accept' }), 404, 'begona biznes');
 assert.equal(await status('biz2', `/shifts/${shiftId}`), 404, 'begona smena');
 
@@ -66,7 +79,7 @@ assert.equal(await status('biz', `/applications/${appId}`, { action: 'accept' })
 detail = (await call('biz', `/shifts/${shiftId}`)).data;
 assert.equal(detail.applicants[0].phone, '+998931112233', 'qabuldan keyin raqam ochiq');
 
-await call('w2', '/register', { role: 'worker', phone: '935556677', name: 'Sardor', password: 'secret1' });
+await call('w2', '/register', { role: 'worker', phone: '935556677', name: 'Sardor', password: 'secret1', phoneToken: sms('935556677') });
 assert.equal(await status('w2', `/shifts/${shiftId}/apply`, {}), 403, 'profilsiz ariza yo‘q');
 await fill('w2');
 assert.equal(await status('w2', `/shifts/${shiftId}/apply`, {}), 409, 'joy qolmadi');
@@ -80,7 +93,7 @@ const shift2 = (await call('biz', '/shifts', { ...shift, slots: 1 })).data.id;
 assert.equal(await status('w', `/shifts/${shift2}/apply`, {}), 403, 'bloklangan ariza bera olmaydi');
 
 // Bir joyli smenaga ikki ariza: bir vaqtda qabul qilinsa ham faqat bittasi o'tadi
-await call('w3', '/register', { role: 'worker', phone: '937778899', name: 'Jasur', password: 'secret1' });
+await call('w3', '/register', { role: 'worker', phone: '937778899', name: 'Jasur', password: 'secret1', phoneToken: sms('937778899') });
 await fill('w3');
 assert.equal(await status('w2', `/shifts/${shift2}/apply`, {}), 200);
 assert.equal(await status('w3', `/shifts/${shift2}/apply`, {}), 200);
@@ -142,9 +155,9 @@ assert.equal(await status('adm', '/admin/overview'), 401, 'chiqqandan keyin yopi
 const from = async (ip: string, path: string, body: object) =>
   (await handle({ method: 'POST', path: '/api' + path, cookie: '', contentType: 'application/json', body: JSON.stringify(body), https: false, ip })).status;
 const wrong = (phone: string) => ({ phone, password: 'xato12' });
-await call('l1', '/register', { role: 'worker', phone: '935550001', name: 'Limit Bir', password: 'secret1' });
-await call('l2', '/register', { role: 'worker', phone: '935550002', name: 'Limit Ikki', password: 'secret1' });
-await call('l3', '/register', { role: 'worker', phone: '935550003', name: 'Limit Uch', password: 'secret1' });
+await call('l1', '/register', { role: 'worker', phone: '935550001', name: 'Limit Bir', password: 'secret1', phoneToken: sms('935550001') });
+await call('l2', '/register', { role: 'worker', phone: '935550002', name: 'Limit Ikki', password: 'secret1', phoneToken: sms('935550002') });
+await call('l3', '/register', { role: 'worker', phone: '935550003', name: 'Limit Uch', password: 'secret1', phoneToken: sms('935550003') });
 
 for (let i = 0; i < 10; i++) assert.equal(await from(`10.0.0.${i}`, '/login', wrong('935550001')), 401);
 assert.equal(await from('10.0.1.1', '/login', { phone: '935550001', password: 'secret1' }), 429, 'bitta raqamga 10 ta xato: boshqa IPdan ham yopiq');
@@ -163,21 +176,12 @@ assert.equal(await from('10.0.5.1', '/admin/login', { password: 'test-admin-paro
 assert.equal(await from('10.0.5.2', '/admin/login', { password: 'test-admin-parol' }), 200, 'admin: boshqa IP ochiq');
 
 // Google orqali kirish
-const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
-function googleToken(uid: string, claims: object = {}, kid = 'sinov') {
-  const t = Math.floor(Date.now() / 1000);
-  const signed = `${b64({ alg: 'RS256', kid })}.${b64({
-    iss: 'https://securetoken.google.com/smena-855fd', aud: 'smena-855fd', sub: uid, iat: t, exp: t + 3600,
-    name: 'Gulnora Karimova', firebase: { sign_in_provider: 'google.com' }, ...claims,
-  })}`;
-  return `${signed}.${crypto.sign('RSA-SHA256', Buffer.from(signed), privateKey).toString('base64url')}`;
-}
 const tok = googleToken('uid-1');
 assert.deepEqual((await call('g', '/google', { idToken: tok })).data, { signup: { name: 'Gulnora Karimova' } }, 'yangi Google hisobi: avval ro‘yxat');
 assert.equal((await call('g', '/me')).data, null, 'ro‘yxatni yakunlamasdan sessiya yo‘q');
-assert.equal(await status('g', '/google', { idToken: tok, role: 'worker', name: 'Gulnora', phone: '935550002' }), 409, 'band raqam');
-assert.equal(await status('g', '/google', { idToken: tok, role: 'business', name: 'Gulnora', phone: '935557001' }), 400, 'biznes nomisiz');
-const gUser = (await call('g', '/google', { idToken: tok, role: 'worker', name: 'Gulnora', phone: '935557001' })).data;
+assert.equal(await status('g', '/google', { idToken: tok, role: 'worker', name: 'Gulnora', phone: '935550002', phoneToken: sms('935550002') }), 409, 'band raqam');
+assert.equal(await status('g', '/google', { idToken: tok, role: 'business', name: 'Gulnora', phone: '935557001', phoneToken: sms('935557001') }), 400, 'biznes nomisiz');
+const gUser = (await call('g', '/google', { idToken: tok, role: 'worker', name: 'Gulnora', phone: '935557001', phoneToken: sms('935557001') })).data;
 assert.equal(gUser.name, 'Gulnora');
 assert.equal((await call('g', '/me')).data.id, gUser.id, 'ro‘yxatdan keyin kirgan');
 assert.equal((await call('g2', '/google', { idToken: googleToken('uid-1') })).data.id, gUser.id, 'keyingi safar darhol kiradi');
@@ -197,7 +201,7 @@ for (const [bad, why] of [
 ] as const) assert.equal(await status('g4', '/google', { idToken: bad }), 401, why);
 
 // Profil
-await call('p', '/register', { role: 'worker', phone: '935558001', name: 'Profil', password: 'secret1' });
+await call('p', '/register', { role: 'worker', phone: '935558001', name: 'Profil', password: 'secret1', phoneToken: sms('935558001') });
 const person = { first_name: 'Malika', last_name: 'Qodirova', region: 'Samarqand viloyati', district: 'Urgut', birth_date: '1999-03-15', gender: 'f', skills: ['Kassir', 'Hakker'], about: 'Tez ishlayman' };
 assert.equal(await status('p', '/me/profile', { ...person, birth_date: `${Number(today.slice(0, 4)) - 15}-01-01` }), 400, '16 yoshdan kichik');
 assert.equal(await status('p', '/me/profile', { ...person, district: 'Moskva' }), 400, 'ro‘yxatda yo‘q tuman');
@@ -235,5 +239,24 @@ assert.equal((await call('p', '/me')).data.id, pr.id, 'shu qurilmada kirgan hold
 assert.equal(await status('p2', '/login', { phone: '935558001', password: 'secret1' }), 401, 'eski parol ishlamaydi');
 assert.equal(await status('p2', '/login', { phone: '935558001', password: 'yangi123' }), 200);
 assert.equal(await status('g', '/me/password', { old_password: '', new_password: 'yangi123' }), 409, 'Google hisobida parol yo‘q');
+
+// SMS bilan raqamni tasdiqlash
+const newbie = { role: 'worker', phone: '935559001', name: 'Yangi', password: 'secret1' };
+assert.deepEqual((await call('s', '/register/check', newbie)).data, { phone: '+998935559001' }, 'SMS dan oldin tekshiruv');
+assert.equal(await status('s', '/register/check', { ...newbie, phone: '901234567' }), 409, 'band raqamga SMS yuborilmaydi');
+assert.equal(await status('s', '/register/check', { ...newbie, password: '1' }), 400, 'xato maydonda SMS yuborilmaydi');
+assert.equal(await status('s', '/register/check', { ...newbie, password: undefined, google: true }), 200, 'Google ro‘yxatida parol so‘ralmaydi');
+assert.equal(await status('s', '/register', newbie), 401, 'tasdiqlanmagan raqam bilan ro‘yxat yo‘q');
+assert.equal(await status('s', '/register', { ...newbie, phoneToken: sms('935559999') }), 400, 'kod boshqa raqamga');
+assert.equal(await status('s', '/register', { ...newbie, phoneToken: sms('935559001', { auth_time: Math.floor(Date.now() / 1000) - 3600 }) }), 401, 'eski kod');
+assert.equal(await status('s', '/register', { ...newbie, phoneToken: googleToken('uid-9', { phone_number: '+998935559001' }) }), 401, 'Google tokeni SMS o‘rnida emas');
+assert.equal(await status('s', '/register', { ...newbie, phoneToken: sms('935559001') }), 200);
+
+assert.equal(await status('s2', '/login/check', { phone: '935559002' }), 404, 'ro‘yxatda yo‘q raqamga SMS yuborilmaydi');
+assert.deepEqual((await call('s2', '/login/check', { phone: '93 555 90 01' })).data, { phone: '+998935559001' });
+assert.equal(await status('s2', '/login/sms', { phoneToken: sms('935559002') }), 404);
+assert.equal(await status('s2', '/login/sms', { phoneToken: 'abc' }), 401);
+assert.equal((await call('s2', '/login/sms', { phoneToken: sms('935559001') })).data.name, 'Yangi', 'SMS kod bilan kirish');
+assert.equal((await call('s2', '/me')).data.phone, '+998935559001');
 
 console.log('Hammasi joyida ✓');

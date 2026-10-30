@@ -425,6 +425,8 @@ html.lenis, html.lenis body { height: auto; }
 .btn-google { gap: 12px; }
 .form .or { display: flex; align-items: center; gap: 12px; margin: 0; color: var(--ink-soft); font-size: .92rem; }
 .form .or::before, .form .or::after { content: ""; flex: 1; border-top: 2px solid currentColor; opacity: .3; }
+.field .code-input { font: 700 1.7rem/1 var(--body); letter-spacing: .45em; text-align: center; font-variant-numeric: tabular-nums; }
+.form .link { padding: 0; text-decoration: underline; color: var(--ink); }
 
 /* Kirish va ro'yxat: chapda forma, o'ngda ipdagi smenalar va hisob-kitob */
 .auth { display: grid; gap: clamp(40px, 5vw, 64px); align-items: start; }
