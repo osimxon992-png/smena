@@ -13,6 +13,8 @@ async function respond(req: Request) {
     contentType: req.headers.get('content-type'),
     body: req.method === 'POST' ? await req.text() : '',
     https: url.protocol === 'https:' || req.headers.get('x-forwarded-proto') === 'https',
+    // Vercel bu sarlavhalarni o'zi yozadi (mijoz soxtalashtira olmaydi); proksisiz serverda ularga ishonib bo'lmaydi
+    ip: req.headers.get('x-real-ip') || req.headers.get('x-forwarded-for')?.split(',')[0].trim() || undefined,
   });
   return new Response(JSON.stringify(res.data ?? null), {
     status: res.status,

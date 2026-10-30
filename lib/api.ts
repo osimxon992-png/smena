@@ -5,7 +5,7 @@ import { createClient, type InStatement, type ResultSet } from '@libsql/client';
 
 type Row = Record<string, any>;
 type User = Row & { id: number; role: 'worker' | 'business'; blocked: number };
-type Ctx = { user: User | undefined; body: Row; id: number; cookieHeader: string; https: boolean; cookie?: string };
+type Ctx = { user: User | undefined; body: Row; id: number; cookieHeader: string; https: boolean; ip: string; cookie?: string };
 
 // Lokalda smena.db fayli, Vercel'da TURSO_DATABASE_URL (libsql://...) va TURSO_AUTH_TOKEN
 const db = createClient({
@@ -53,6 +53,11 @@ const ready = db.executeMultiple(`
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (shift_id, worker_id)
   );
+  CREATE TABLE IF NOT EXISTS login_fails (
+    key TEXT NOT NULL,
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS login_fails_key ON login_fails (key, at);
 `);
 
 // libSQL qatorlari massivga o'xshash obyekt: JSON uchun oddiy {ustun: qiymat} ga aylantiramiz
@@ -173,10 +178,35 @@ async function register(ctx: Ctx) {
   }
 }
 
-// shortcut: login urinishlari cheklanmagan; ommaga chiqarishdan oldin IP bo'yicha limit qo'ying
+// Parol tanlashni cheklash: 15 daqiqada noto'g'ri urinishlar soni [kalit, ruxsat] dan oshsa, 429.
+// Hisob bazada, xotirada emas: Vercel'ning hamma nusxalari bitta hisobni ko'radi.
+const FAIL_WINDOW = "datetime('now', '-15 minutes')";
+
+async function checkLimits(limits: [string, number][]) {
+  for (const [key, max] of limits) {
+    const r = await one(`SELECT COUNT(*) n FROM login_fails WHERE key = ? AND at > ${FAIL_WINDOW}`, key);
+    if (Number(r?.n) >= max) fail(429, 'Juda ko‘p noto‘g‘ri urinish. 15 daqiqadan keyin qayta urinib ko‘ring');
+  }
+}
+
+async function recordFail(limits: [string, number][]) {
+  await db.batch([
+    `DELETE FROM login_fails WHERE at <= ${FAIL_WINDOW}`,
+    ...limits.map(([key]) => ({ sql: 'INSERT INTO login_fails (key) VALUES (?)', args: [key] })),
+  ], 'write');
+}
+
+// IP bo'yicha 20 ta (bir manzildan ko'p raqam sinash), raqam bo'yicha 10 ta (ko'p manzildan bitta raqam)
 async function login(ctx: Ctx) {
-  const u = await one('SELECT * FROM users WHERE phone = ?', phone(ctx.body.phone));
-  if (!u || !verify(String(ctx.body.password ?? ''), u.pass)) fail(401, 'Telefon raqam yoki parol noto‘g‘ri');
+  const p = phone(ctx.body.phone);
+  const limits: [string, number][] = [[`ip:${ctx.ip}`, 20], [`phone:${p}`, 10]];
+  await checkLimits(limits);
+  const u = await one('SELECT * FROM users WHERE phone = ?', p);
+  if (!u || !verify(String(ctx.body.password ?? ''), u.pass)) {
+    await recordFail(limits);
+    fail(401, 'Telefon raqam yoki parol noto‘g‘ri');
+  }
+  await exec('DELETE FROM login_fails WHERE key = ?', `phone:${p}`);
   return startSession(ctx, u!.id);
 }
 
@@ -351,10 +381,16 @@ function needAdmin(ctx: Ctx) {
   if (!isAdmin(ctx.cookieHeader)) fail(401, 'Admin sifatida kiring');
 }
 
-// shortcut: urinishlar cheklanmagan; ommaga chiqarishdan oldin IP bo'yicha limit qo'ying
-function adminLogin(ctx: Ctx) {
+// IP bo'yicha 15 daqiqada 5 ta noto'g'ri urinish
+async function adminLogin(ctx: Ctx) {
   const secret = process.env.ADMIN_PASSWORD || fail(503, 'Admin paneli yoqilmagan: serverda ADMIN_PASSWORD o‘rnatilmagan');
-  if (!sameSecret(String(ctx.body.password ?? ''), secret)) fail(401, 'Parol noto‘g‘ri');
+  const limits: [string, number][] = [[`admin:${ctx.ip}`, 5]];
+  await checkLimits(limits);
+  if (!sameSecret(String(ctx.body.password ?? ''), secret)) {
+    await recordFail(limits);
+    fail(401, 'Parol noto‘g‘ri');
+  }
+  await exec('DELETE FROM login_fails WHERE key = ?', limits[0][0]);
   const exp = Math.floor(Date.now() / 1000) + ADMIN_TTL;
   ctx.cookie = `adm=${exp}.${adminSign(exp)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${ADMIN_TTL}${ctx.https ? '; Secure' : ''}`;
   return { ok: true };
@@ -504,11 +540,11 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['POST', /^\/api\/applications\/(\d+)\/cancel$/, cancel],
 ];
 
-export type ApiRequest = { method: string; path: string; cookie: string | null; contentType: string | null; body: string; https: boolean };
+export type ApiRequest = { method: string; path: string; cookie: string | null; contentType: string | null; body: string; https: boolean; ip?: string };
 export type ApiResponse = { status: number; data: unknown; cookie?: string };
 
 export async function handle(req: ApiRequest): Promise<ApiResponse> {
-  const ctx: Ctx = { user: undefined, body: {}, id: 0, cookieHeader: req.cookie ?? '', https: req.https };
+  const ctx: Ctx = { user: undefined, body: {}, id: 0, cookieHeader: req.cookie ?? '', https: req.https, ip: req.ip || 'unknown' };
   try {
     await ready;
     ctx.user = await currentUser(ctx.cookieHeader);

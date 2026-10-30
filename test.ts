@@ -115,4 +115,28 @@ await status('w2', '/login', { phone: '935556677', password: temp });
 assert.equal(await status('adm', '/admin/logout', {}), 200);
 assert.equal(await status('adm', '/admin/overview'), 401, 'chiqqandan keyin yopiq');
 
+// Parol tanlashni cheklash: har urinish o'z IP manzilidan
+const from = async (ip: string, path: string, body: object) =>
+  (await handle({ method: 'POST', path: '/api' + path, cookie: '', contentType: 'application/json', body: JSON.stringify(body), https: false, ip })).status;
+const wrong = (phone: string) => ({ phone, password: 'xato12' });
+await call('l1', '/register', { role: 'worker', phone: '935550001', name: 'Limit Bir', password: 'secret1' });
+await call('l2', '/register', { role: 'worker', phone: '935550002', name: 'Limit Ikki', password: 'secret1' });
+await call('l3', '/register', { role: 'worker', phone: '935550003', name: 'Limit Uch', password: 'secret1' });
+
+for (let i = 0; i < 10; i++) assert.equal(await from(`10.0.0.${i}`, '/login', wrong('935550001')), 401);
+assert.equal(await from('10.0.1.1', '/login', { phone: '935550001', password: 'secret1' }), 429, 'bitta raqamga 10 ta xato: boshqa IPdan ham yopiq');
+assert.equal(await from('10.0.1.1', '/login', { phone: '935550002', password: 'secret1' }), 200, 'boshqa raqamga ta’sir qilmaydi');
+
+for (let i = 0; i < 20; i++) assert.equal(await from('10.0.2.1', '/login', wrong(`9355510${String(i).padStart(2, '0')}`)), 401);
+assert.equal(await from('10.0.2.1', '/login', { phone: '935550002', password: 'secret1' }), 429, 'bitta IPdan 20 ta xato');
+assert.equal(await from('10.0.2.2', '/login', { phone: '935550002', password: 'secret1' }), 200, 'boshqa IP ochiq');
+
+for (let i = 0; i < 9; i++) await from(`10.0.3.${i}`, '/login', wrong('935550003'));
+assert.equal(await from('10.0.3.9', '/login', { phone: '935550003', password: 'secret1' }), 200);
+for (let i = 0; i < 9; i++) assert.equal(await from(`10.0.4.${i}`, '/login', wrong('935550003')), 401, 'to‘g‘ri kirish raqam hisobini nollaydi');
+
+for (let i = 0; i < 5; i++) assert.equal(await from('10.0.5.1', '/admin/login', { password: 'xato' }), 401);
+assert.equal(await from('10.0.5.1', '/admin/login', { password: 'test-admin-parol' }), 429, 'admin: bitta IPdan 5 ta xato');
+assert.equal(await from('10.0.5.2', '/admin/login', { password: 'test-admin-parol' }), 200, 'admin: boshqa IP ochiq');
+
 console.log('Hammasi joyida ✓');
