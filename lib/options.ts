@@ -72,3 +72,14 @@ export const SKILLS = [
 ];
 export const ORG_TYPES = ['To‘yxona', 'Restoran yoki kafe', 'Ombor', 'Do‘kon', 'Topshirish punkti', 'Tadbir tashkilotchisi', 'Boshqa'];
 export const MIN_AGE = 16;
+
+// Obuna tariflari: Farbo (AI) dan kuniga (oxirgi 24 soat) necha marta foydalanish mumkin.
+// To'lov tizimi yo'q: Pro'ni admin yoqadi (admin panel → foydalanuvchi → Obuna)
+export const PLANS = {
+  free: { name: 'Bepul', ai: 30, tts: 10 },
+  pro: { name: 'Pro', ai: 300, tts: 150 },
+} as const;
+export type Plan = keyof typeof PLANS;
+export const planName = (plan: Plan, role: 'worker' | 'business') => (plan === 'pro' ? (role === 'worker' ? 'Ishchi Pro' : 'Biznes Pro') : PLANS.free.name);
+// Obuna olish uchun murojaat
+export const PLAN_CONTACT = { label: 'Telegram: @osimxon_00', href: 'https://t.me/osimxon_00' };

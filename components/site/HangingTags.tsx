@@ -19,6 +19,7 @@ const HANG = [[0.1, 28], [0.3, 44], [0.5, 22], [0.7, 40], [0.9, 26]];
 export const fromShift = (s: Shift): TagData => ({
   role: s.title, pay: s.pay, place: `${s.org}, ${s.place}`,
   when: `${day(s.date, false)}, ${s.start_time}–${s.end_time}`, left: `${(s.slots ?? 0) - (s.taken ?? 0)} joy qoldi`,
+  sample: !!s.demo, // admin qo'shgan demo smena "Namuna" muhri bilan
 });
 
 export default function HangingTags() {

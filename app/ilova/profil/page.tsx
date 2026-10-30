@@ -6,7 +6,7 @@ import { home, useApp } from '@/components/app/AppShell';
 import Avatar from '@/components/app/Avatar';
 import { Field, useSubmit } from '@/components/app/parts';
 import { api, type Me } from '@/lib/client';
-import { MIN_AGE, ORG_TYPES, REGIONS, SKILLS } from '@/lib/options';
+import { MIN_AGE, ORG_TYPES, PLAN_CONTACT, PLANS, REGIONS, SKILLS, planName } from '@/lib/options';
 
 // Rasmni markazidan kvadrat qilib qirqadi va 320×320 JPEG ga kichraytiradi (bazada ~20–40 KB)
 async function toJpeg(file: File) {
@@ -152,6 +152,33 @@ function ProfileForm({ me }: { me: Me }) {
   );
 }
 
+const Usage = ({ label, used, max }: { label: string; used: number; max: number }) => (
+  <div className="usage">
+    <p><span>{label}</span><b>{Math.min(used, max)} / {max}</b></p>
+    <div className="usage-bar" aria-hidden="true"><div style={{ width: `${Math.min(100, (used / max) * 100)}%` }} /></div>
+  </div>
+);
+
+// Obuna: tarif, Farbo'dan bugungi foydalanish va Pro taklifi. Pro'ni admin yoqadi (to'lov tizimi yo'q)
+function SubscriptionCard({ me }: { me: Me }) {
+  const limits = PLANS[me.plan];
+  return (
+    <section className={`sheet sub-card${me.plan === 'pro' ? ' is-pro' : ''}`} id="obuna">
+      <h2>Obuna</h2>
+      <p className="sub-plan"><b>{planName(me.plan, me.role)}</b>{me.plan === 'pro' && <span>{me.plan_until ? `${me.plan_until} gacha` : 'muddatsiz'}</span>}</p>
+      <Usage label="Farbo savollari" used={me.ai_used} max={limits.ai} />
+      <Usage label="Ovozli javoblar" used={me.tts_used} max={limits.tts} />
+      <p className="hint">Oxirgi 24 soat bo‘yicha hisoblanadi.</p>
+      {me.plan === 'free' && (
+        <div className="sub-offer">
+          <p><b>{planName('pro', me.role)}</b>: kuniga {PLANS.pro.ai} ta savol va {PLANS.pro.tts} ta ovozli javob (bepulda {PLANS.free.ai} va {PLANS.free.tts}).</p>
+          <a className="btn" href={PLAN_CONTACT.href} target="_blank" rel="noreferrer">Pro olish · {PLAN_CONTACT.label}</a>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function AccountCard({ me }: { me: Me }) {
   const { setMe, toast } = useApp();
   const [open, setOpen] = useState(false);
@@ -207,7 +234,10 @@ export default function Profile() {
           <section className="sheet"><PhotoPicker me={me} /></section>
           <ProfileForm me={me} />
         </div>
-        <AccountCard me={me} />
+        <div className="profile-side">
+          <AccountCard me={me} />
+          <SubscriptionCard me={me} />
+        </div>
       </div>
     </>
   );

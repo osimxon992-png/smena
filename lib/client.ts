@@ -2,7 +2,7 @@
 export type Shift = {
   id: number; title: string; place: string; date: string; start_time: string; end_time: string;
   pay: number; slots?: number; taken?: number; note?: string; org?: string; org_rating?: number | null;
-  my_status?: Status | null; pending?: number;
+  my_status?: Status | null; pending?: number; demo?: number;
 };
 export type Status = 'pending' | 'accepted' | 'rejected' | 'came' | 'noshow';
 export type Me = {
@@ -10,6 +10,8 @@ export type Me = {
   first_name: string | null; last_name: string | null; birth_date: string | null; age: number | null; gender: 'm' | 'f' | null;
   region: string | null; district: string | null; about: string; skills: string[]; org_type: string | null; address: string | null;
   photo: string | null; google: boolean; complete: boolean;
+  // Obuna: amaldagi tarif, Pro tugash sanasi (null = muddatsiz), oxirgi 24 soatdagi Farbo foydalanishi
+  plan: 'free' | 'pro'; plan_until: string | null; ai_used: number; tts_used: number;
 };
 
 export const STATUS: Record<Status, string> = { pending: 'Kutilmoqda', accepted: 'Qabul qilindi', rejected: 'Rad etildi', came: 'Bajarildi', noshow: 'Kelmadi' };

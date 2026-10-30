@@ -172,9 +172,8 @@ for (let i = 0; i < 9; i++) await from(`10.0.3.${i}`, '/login', wrong('935550003
 assert.equal(await from('10.0.3.9', '/login', { phone: '935550003', password: 'secret1' }), 200);
 for (let i = 0; i < 9; i++) assert.equal(await from(`10.0.4.${i}`, '/login', wrong('935550003')), 401, 'to‘g‘ri kirish raqam hisobini nollaydi');
 
-for (let i = 0; i < 5; i++) assert.equal(await from('10.0.5.1', '/admin/login', { password: 'xato' }), 401);
-assert.equal(await from('10.0.5.1', '/admin/login', { password: 'test-admin-parol' }), 429, 'admin: bitta IPdan 5 ta xato');
-assert.equal(await from('10.0.5.2', '/admin/login', { password: 'test-admin-parol' }), 200, 'admin: boshqa IP ochiq');
+for (let i = 0; i < 10; i++) assert.equal(await from('10.0.5.1', '/admin/login', { password: 'xato' }), 401);
+assert.equal(await from('10.0.5.1', '/admin/login', { password: 'test-admin-parol' }), 200, 'admin: xato paroldan keyin kutish yo‘q');
 
 // Google orqali kirish
 const tok = googleToken('uid-1');
@@ -284,9 +283,10 @@ process.env.GEMINI_API_KEY = 'test-kalit';
 const said = (o: object) => ({ candidates: [{ content: { parts: [{ text: JSON.stringify({ heard: '', shift_ids: [], link: '', ...o }) }] } }] });
 
 const openShift = (await call('guest', '/shifts')).data[0];
-answer = said({ heard: 'eshitilmagan', reply: 'Bugun bitta smena bor.', shift_ids: [openShift.id, 99999], link: '/qoidalar' });
+answer = said({ heard: 'eshitilmagan', reply: 'Bugun bitta smena bor: 250 000 so‘m.', speech: 'Bugun bitta smena bor: ikki yuz ellik ming so‘m.', shift_ids: [openShift.id, 99999], link: '/qoidalar' });
 const z = (await call('w', '/ai', { text: 'Bugungi ishlarni ayt', history: [{ role: 'user', text: 'salom' }, { role: 'hacker', text: 'x' }] })).data;
-assert.equal(z.reply, 'Bugun bitta smena bor.');
+assert.equal(z.reply, 'Bugun bitta smena bor: 250 000 so‘m.');
+assert.equal(z.speech, 'Bugun bitta smena bor: ikki yuz ellik ming so‘m.', 'ovoz uchun raqamlar so‘z bilan');
 assert.deepEqual(z.shifts.map((s: any) => s.id), [openShift.id], 'faqat haqiqiy ochiq smena kartochka bo‘ladi');
 assert.equal(z.heard, '', 'matnli savolda heard yo‘q');
 assert.equal(z.link, '/qoidalar');
@@ -318,11 +318,72 @@ assert.equal(tts.status, 200);
 assert.equal(tts.file!.type, 'audio/wav');
 assert.equal(Buffer.from(tts.file!.body).toString('latin1', 0, 4), 'RIFF', 'xom PCM WAV ga o‘raladi');
 assert.equal(tts.file!.body.byteLength, 44 + 480);
+const ttsReq = seen.at(-1).body;
+assert.equal(ttsReq.generationConfig.speechConfig.languageCode, 'uz-UZ', 'ovoz o‘zbek tilida');
+assert.match(seen.at(-1).url, /\/gemini-3\.8-flash-tts:/);
+await handle({ method: 'POST', path: '/api/ai/speak', cookie: jar.w, contentType: 'application/json', body: JSON.stringify({ text: 'Haqi 250 000 so‘m, 18:30 da, 1 200 000' }), https: false });
+assert.equal(seen.at(-1).body.contents[0].parts[0].text, 'Haqi ikki yuz ellik ming so‘m, o‘n sakkiz o‘ttiz da, bir million ikki yuz ming', 'qolgan raqamlar ham o‘zbekcha');
 
 answer = said({ reply: 'ok' });
 for (let i = 0; i < 15; i++) assert.equal(await from('10.0.9.1', '/ai', { text: 'salom' }), 200);
 assert.equal(await from('10.0.9.1', '/ai', { text: 'salom' }), 429, 'mehmonga 10 daqiqada 15 ta savol');
 assert.equal(await from('10.0.9.2', '/ai', { text: 'salom' }), 200, 'boshqa IP ochiq');
+
+// Admin panelidagi Farbo: faqat admin, limitsiz, butun platforma ma'lumoti, telefonlarsiz
+assert.equal(await status('w', '/admin/ai', { text: 'salom' }), 401, 'oddiy foydalanuvchi admin Farbo’sini ishlata olmaydi');
+await call('adm2', '/admin/login', { password: 'test-admin-parol' });
+const someUser = (await call('adm2', '/admin/overview')).data.users[0];
+answer = { candidates: [{ content: { parts: [{ text: JSON.stringify({ heard: '', reply: 'Bitta bloklangan ishchi bor.', user_ids: [someUser.id, 99999], shift_ids: [openShift.id, 99999] }) }] } }] };
+const ad = (await call('adm2', '/admin/ai', { text: 'Kimlar bloklangan?' })).data;
+assert.equal(ad.reply, 'Bitta bloklangan ishchi bor.');
+assert.deepEqual(ad.refs.map((r: any) => `${r.kind}:${r.id}`), [`user:${someUser.id}`, `shift:${openShift.id}`], 'faqat bazadagi foydalanuvchi va smena havola bo‘ladi');
+const adminSys = seen.at(-1).body.systemInstruction.parts[0].text;
+assert.ok(adminSys.includes('statistika') && adminSys.includes('foydalanuvchilar') && adminSys.includes('arizalar'), 'admin konteksti');
+assert.ok(!/\+998/.test(adminSys), 'admin kontekstida ham telefon raqamlar yo‘q');
+for (let i = 0; i < 50; i++) assert.equal(await status('adm2', '/admin/ai', { text: 'salom' }), 200, 'admin uchun limit yo‘q');
+for (let i = 0; i < 20; i++) assert.equal(await status('adm2', '/ai', { text: 'salom' }), 200, 'admin oddiy Farbo’da ham limitsiz');
+
+// Obunalar: Farbo kunlik limiti tarifga bog'liq; Pro'ni admin yoqadi va o'zgartiradi
+const addMonths = (d: string, n: number) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCMonth(x.getUTCMonth() + n); return x.toISOString().slice(0, 10); };
+answer = said({ reply: 'ok' });
+const sub = (await call('w2', '/me')).data;
+assert.equal(sub.plan, 'free', 'yangi foydalanuvchi bepul tarifda');
+for (let i = sub.ai_used; i < 30; i++) assert.equal(await status('w2', '/ai', { text: 'salom' }), 200);
+assert.equal((await call('w2', '/me')).data.ai_used, 30, 'bugungi foydalanish profilda');
+const over = await call('w2', '/ai', { text: 'salom' });
+assert.equal(over.status, 429, 'bepul: kuniga 30 ta savol');
+assert.match(over.data.error, /Pro obuna/, 'limit xabarida Pro taklifi');
+assert.equal(await status('w2', `/admin/users/${sub.id}/plan`, { plan: 'pro', months: 1 }), 401, 'obunani faqat admin o‘zgartiradi');
+assert.equal(await status('adm2', `/admin/users/${sub.id}/plan`, { plan: 'pro', months: 2 }), 400, 'muddat ro‘yxatdan');
+assert.equal(await status('adm2', `/admin/users/${sub.id}/plan`, { plan: 'gold' }), 400);
+assert.equal(await status('adm2', '/admin/users/99999/plan', { plan: 'free' }), 404);
+assert.deepEqual((await call('adm2', `/admin/users/${sub.id}/plan`, { plan: 'pro', months: 1 })).data, { plan: 'pro', plan_until: addMonths(today, 1) });
+const pro = (await call('w2', '/me')).data;
+assert.deepEqual([pro.plan, pro.plan_until], ['pro', addMonths(today, 1)]);
+const more = await call('w2', '/ai', { text: 'salom' });
+assert.equal(more.status, 200, 'Pro: limit oshdi');
+assert.equal(more.data.left, 300 - 30 - 1, 'qolgan savollar soni');
+assert.equal((await call('adm2', `/admin/users/${sub.id}/plan`, { plan: 'pro', months: 3 })).data.plan_until, addMonths(addMonths(today, 1), 3), 'uzaytirish tugash sanasidan qo‘shiladi');
+assert.equal((await call('adm2', '/admin/overview')).data.stats.pro, 1, 'statistikada Pro obunachilar');
+assert.equal((await call('adm2', `/admin/users/${sub.id}`)).data.user.plan, 'pro', 'admin kartochkasida tarif');
+assert.equal((await call('adm2', `/admin/users/${sub.id}/plan`, { plan: 'pro', months: 0 })).data.plan_until, null, 'muddatsiz Pro');
+assert.equal((await call('adm2', `/admin/users/${sub.id}/plan`, { plan: 'free' })).data.plan, 'free');
+assert.equal(await status('w2', '/ai', { text: 'salom' }), 429, 'bepulga qaytgach yana 30 ta chegarasi');
+assert.equal((await call('guest', '/ai', { text: 'salom' })).data.left, null, 'mehmonga left yo‘q');
 fake.close();
+
+// Demo ishlar: faqat admin qo'shadi va o'chiradi; "(demo)" belgili, ariza berib bo'lmaydi
+assert.equal(await status('w', '/admin/demo', { action: 'add' }), 401);
+assert.equal((await call('adm2', '/admin/demo', { action: 'add' })).data.added, 12);
+const demoOpen = (await call('guest', '/shifts')).data.filter((s: any) => s.demo);
+assert.equal(demoOpen.length, 12, 'demo smenalar ochiq ro‘yxatda (bugungi o‘tgani ertaga suriladi)');
+assert.ok(demoOpen.every((s: any) => s.org.endsWith('(demo)')), 'biznes nomida (demo)');
+assert.equal(await status('w3', `/shifts/${demoOpen[0].id}/apply`, {}), 409, 'demo smenaga ariza berilmaydi');
+assert.equal(await status('x', '/login', { phone: '+998000000001', password: 'secret1' }), 401, 'demo biznes hisobiga kirib bo‘lmaydi');
+assert.equal((await call('adm2', '/admin/demo', { action: 'add' })).data.added, 12, 'qayta bosilsa yangilanadi');
+assert.equal((await call('guest', '/shifts')).data.filter((s: any) => s.demo).length, 12, 'ikki marta qo‘shilmaydi');
+assert.equal((await call('adm2', '/admin/demo', { action: 'remove' })).data.removed, 12);
+assert.equal((await call('guest', '/shifts')).data.filter((s: any) => s.demo).length, 0);
+assert.ok(!(await call('adm2', '/admin/overview')).data.users.some((u: any) => u.phone.startsWith('+99800000000')), 'demo bizneslar ham o‘chdi');
 
 console.log('Hammasi joyida ✓');

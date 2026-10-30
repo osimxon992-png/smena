@@ -2,12 +2,16 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api, day, som, STATUS, type Status } from '@/lib/client';
+import { PLANS, planName } from '@/lib/options';
 
 export type Target = { kind: 'user' | 'shift'; id: number };
 type Open = (t: Target) => void;
 
 type UserCard = {
-  user: { id: number; role: 'worker' | 'business'; name: string; org: string | null; phone: string; blocked: number | boolean; created_at: string; rating: number | null; done?: number };
+  user: {
+    id: number; role: 'worker' | 'business'; name: string; org: string | null; phone: string; blocked: number | boolean; created_at: string; rating: number | null; done?: number;
+    plan: 'free' | 'pro'; plan_until: string | null; ai_used: number; tts_used: number;
+  };
   sessions: { active: number; last_login: string | null };
   applications: { id: number; status: Status; worker_rating: number | null; business_rating: number | null; shift_id: number; title: string; date: string; start_time: string; end_time: string; pay: number; org: string; org_phone: string }[];
   shifts: { id: number; title: string; place: string; date: string; start_time: string; end_time: string; pay: number; slots: number; note: string; taken: number; pending: number; came: number }[];
@@ -20,6 +24,28 @@ type ShiftCard = {
 const stars = (n: number | null) => (n ? `★ ${n}` : '—');
 const Row = ({ k, children }: { k: string; children: React.ReactNode }) => <div className="kv"><dt>{k}</dt><dd>{children}</dd></div>;
 const Tel = ({ phone }: { phone: string }) => <a href={`tel:${phone}`}>{phone}</a>;
+const MONTHS = [[1, '1 oy'], [3, '3 oy'], [6, '6 oy'], [12, '1 yil'], [0, 'Muddatsiz']] as const;
+
+// Obunani o'zgartirish: Pro'ni yoqish yoki uzaytirish (amaldagi muddatga qo'shiladi), yoki bepulga qaytarish
+function PlanControl({ user, onSave }: { user: UserCard['user']; onSave: (body: object) => void }) {
+  const [months, setMonths] = useState<number>(1);
+  const pro = user.plan === 'pro';
+  return (
+    <div className="plan-control">
+      <p>
+        <b>{planName(user.plan, user.role)}</b>{pro && <> · {user.plan_until ? `${user.plan_until} gacha` : 'muddatsiz'}</>}
+        <span className="muted"> · bugun Farbo: {user.ai_used} / {PLANS[user.plan].ai} savol, {user.tts_used} / {PLANS[user.plan].tts} ovoz</span>
+      </p>
+      <div className="detail-actions">
+        <select value={months} onChange={(e) => setMonths(Number(e.target.value))} aria-label="Pro muddati">
+          {MONTHS.map(([m, label]) => <option key={m} value={m}>{label}</option>)}
+        </select>
+        <button type="button" className="btn btn-sm" onClick={() => onSave({ plan: 'pro', months })}>{pro ? 'Pro’ni uzaytirish' : 'Pro yoqish'}</button>
+        {pro && <button type="button" className="btn btn-ghost btn-sm" onClick={() => confirm(`${user.name} bepul tarifga o‘tkazilsinmi?`) && onSave({ plan: 'free' })}>Bepulga o‘tkazish</button>}
+      </div>
+    </div>
+  );
+}
 
 // O'ng tomondan ochiladigan tafsilot oynasi: foydalanuvchi yoki smena haqida hamma narsa
 export default function Detail({ target, onOpen, onClose, onChanged }: { target: Target; onOpen: Open; onClose: () => void; onChanged: () => void }) {
@@ -83,6 +109,9 @@ export default function Detail({ target, onOpen, onClose, onChanged }: { target:
             <button type="button" className="link" onClick={() => navigator.clipboard?.writeText(temp).then(() => setNote('Parol nusxalandi'))}>Nusxalash</button>
           </div>
         )}
+
+        <h3 className="detail-h3">Obuna</h3>
+        <PlanControl user={u} onSave={(body) => act(`/admin/users/${u.id}/plan`, body, (r) => setNote(r.plan === 'pro' ? `Pro yoqildi: ${r.plan_until ? `${r.plan_until} gacha` : 'muddatsiz'}` : 'Bepul tarifga o‘tkazildi'))} />
 
         {u.role === 'worker' ? (
           <>

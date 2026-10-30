@@ -3,10 +3,11 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { api, day, som, STATUS, tashkentDate, type Status } from '@/lib/client';
+import Farbo from '@/components/Farbo';
 import Detail, { type Target } from './Detail';
 
-type Stats = { workers: number; businesses: number; blocked: number; shifts: number; open_shifts: number; applications: number; pending: number; came: number; noshow: number; paid: number; commission: number };
-type User = { id: number; role: 'worker' | 'business'; name: string; org: string | null; phone: string; blocked: number; created_at: string; rating: number | null; done: number; noshows: number; shifts: number };
+type Stats = { workers: number; businesses: number; blocked: number; pro: number; shifts: number; open_shifts: number; applications: number; pending: number; came: number; noshow: number; paid: number; commission: number };
+type User = { id: number; role: 'worker' | 'business'; name: string; org: string | null; phone: string; blocked: number; created_at: string; plan: string | null; plan_until: string | null; rating: number | null; done: number; noshows: number; shifts: number };
 type ShiftRow = { id: number; title: string; place: string; date: string; start_time: string; end_time: string; pay: number; slots: number; org_id: number; org: string; phone: string; taken: number; pending: number; came: number; noshow: number; is_open: number };
 type AppRow = { id: number; shift_id: number; status: Status; worker_rating: number | null; business_rating: number | null; created_at: string; worker_id: number; worker: string; worker_phone: string; title: string; date: string; start_time: string; pay: number; org: string };
 type Login = { created_at: string; user_id: number; name: string; role: 'worker' | 'business'; org: string | null; phone: string; active: number };
@@ -16,7 +17,7 @@ type Open = (t: Target) => void;
 // Yon menyu: guruhlar va bo'limlar
 const GROUPS = [
   ['Asosiy', [['umumiy', 'Umumiy holat'], ['bugun', 'Bugun']]],
-  ['Foydalanuvchilar', [['ishchilar', 'Ishchilar'], ['bizneslar', 'Bizneslar'], ['bloklangan', 'Bloklanganlar']]],
+  ['Foydalanuvchilar', [['ishchilar', 'Ishchilar'], ['bizneslar', 'Bizneslar'], ['obunachilar', 'Pro obunachilar'], ['bloklangan', 'Bloklanganlar']]],
   ['Smenalar', [['ochiq', 'Ochiq smenalar'], ['yopilgan', 'Yopilgan smenalar']]],
   ['Arizalar', [['yangi', 'Yangi arizalar'], ['qabul', 'Qabul qilinganlar'], ['bajarilgan', 'Bajarilganlar'], ['kelmagan', 'Kelmaganlar'], ['arizalar', 'Barcha arizalar']]],
   ['Hisobot', [['moliya', 'Moliya'], ['baholar', 'Baholar'], ['kirishlar', 'Kirishlar']]],
@@ -31,6 +32,8 @@ const matches = (q: string, ...fields: unknown[]) => !q || fields.some((f) => no
 const clock = (d: Date) => d.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const stars = (n: number | null) => (n ? `★ ${n}` : '—');
 const Tel = ({ phone }: { phone: string }) => <a href={`tel:${phone}`}>{phone}</a>;
+// Amaldagi Pro: muddati yo'q yoki hali tugamagan
+const isPro = (u: { plan: string | null; plan_until: string | null }) => u.plan === 'pro' && (!u.plan_until || u.plan_until >= tashkentDate());
 const Name = ({ text, onClick }: { text: string; onClick: () => void }) => <button type="button" className="cell-link" onClick={onClick}>{text}</button>;
 
 function Login({ onDone }: { onDone: () => void }) {
@@ -61,7 +64,7 @@ function Table({ head, empty, children, count }: { head: React.ReactNode; empty:
 
 function UsersTable({ rows, onOpen, onBlock }: { rows: User[]; onOpen: Open; onBlock: (u: User, blocked: boolean) => void }) {
   return (
-    <Table empty="Bu bo‘limda foydalanuvchi yo‘q." head={<><th>#</th><th>Ism</th><th>Telefon</th><th className="num">Reyting</th><th className="num">Bajargan</th><th className="num">Kelmagan</th><th className="num">Smenalari</th><th>Qo‘shilgan</th><th>Amal</th></>}>
+    <Table empty="Bu bo‘limda foydalanuvchi yo‘q." head={<><th>#</th><th>Ism</th><th>Telefon</th><th className="num">Reyting</th><th className="num">Bajargan</th><th className="num">Kelmagan</th><th className="num">Smenalari</th><th>Obuna</th><th>Qo‘shilgan</th><th>Amal</th></>}>
       {rows.map((u) => (
         <tr key={u.id}>
           <td className="num">{u.id}</td>
@@ -71,6 +74,7 @@ function UsersTable({ rows, onOpen, onBlock }: { rows: User[]; onOpen: Open; onB
           <td className="num">{u.role === 'worker' ? u.done : '—'}</td>
           <td className="num">{u.role === 'worker' ? u.noshows : '—'}</td>
           <td className="num">{u.role === 'business' ? u.shifts : '—'}</td>
+          <td>{isPro(u) ? <span className="chip chip-pro">Pro{u.plan_until ? ` · ${u.plan_until} gacha` : ''}</span> : <span className="muted">Bepul</span>}</td>
           <td>{u.created_at.slice(0, 10)}</td>
           <td>
             {u.blocked
@@ -122,6 +126,39 @@ function AppsTable({ rows, onOpen, count }: { rows: AppRow[]; onOpen: Open; coun
         </tr>
       ))}
     </Table>
+  );
+}
+
+// Sayt bo'sh ko'rinmasin: namuna bizneslar va smenalarni bir tugma bilan qo'shish yoki o'chirish
+function DemoControl({ count, onDone }: { count: number; onDone: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  async function run(action: 'add' | 'remove') {
+    if (action === 'remove' && !confirm('Barcha demo bizneslar va smenalar o‘chiriladi. Davom etasizmi?')) return;
+    setBusy(true);
+    setMsg('');
+    try {
+      const r = await api<{ added?: number; removed?: number }>('/admin/demo', { action });
+      setMsg(action === 'add' ? `${r.added} ta demo smena qo‘shildi` : `${r.removed} ta demo smena o‘chirildi`);
+      await onDone();
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="demo-box">
+      <div>
+        <h2 className="admin-h2">Demo ishlar</h2>
+        <p className="hint">4 ta namuna biznes va 12 ta smena (bugundan 5 kungacha). Nomida “(demo)” turadi, ularga ariza berib bo‘lmaydi. Hozir: {count} ta demo smena.</p>
+      </div>
+      <div className="actions">
+        <button type="button" className="btn" disabled={busy} onClick={() => run('add')}>{count ? 'Demo ishlarni yangilash' : 'Demo ishlarni qo‘shish'}</button>
+        {count > 0 && <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => run('remove')}>O‘chirish</button>}
+      </div>
+      {msg && <p className="demo-msg" role="status">{msg}</p>}
+    </section>
   );
 }
 
@@ -209,6 +246,7 @@ export default function AdminPanel() {
     ishchilar: users.filter((u) => u.role === 'worker'),
     bizneslar: users.filter((u) => u.role === 'business'),
     bloklangan: users.filter((u) => u.blocked),
+    obunachilar: users.filter(isPro),
     ochiq: shifts.filter((x) => x.is_open),
     yopilgan: shifts.filter((x) => !x.is_open),
     yangi: byStatus('pending'), qabul: byStatus('accepted'), bajarilgan: byStatus('came'), kelmagan: byStatus('noshow'),
@@ -256,19 +294,20 @@ export default function AdminPanel() {
                 ['ishchilar', s.workers, 'Ishchilar'], ['bizneslar', s.businesses, 'Bizneslar'],
                 ['ochiq', s.open_shifts, `Ochiq smenalar (${s.shifts} jami)`], ['yangi', s.pending, 'Javob kutayotgan arizalar'],
                 ['bajarilgan', s.came, 'Bajarilgan smenalar'], ['kelmagan', s.noshow, 'Kelmaganlar'],
-                ['bloklangan', s.blocked, 'Bloklanganlar'],
+                ['bloklangan', s.blocked, 'Bloklanganlar'], ['obunachilar', s.pro, 'Pro obunachilar'],
               ] as [Tab, number, string][]).map(([k, n, label]) => (
                 <button key={k} type="button" className={`stat${hot[k] && n ? ' alert' : ''}`} onClick={() => setTab(k)}><strong>{n}</strong><span>{label}</span></button>
               ))}
               <button type="button" className="stat money" onClick={() => setTab('moliya')}><strong>{som(s.commission)}</strong><span>Komissiya, 15% ({som(s.paid)} ish haqidan)</span></button>
             </div>
+            <DemoControl count={data.shifts.filter((x) => x.org.endsWith('(demo)')).length} onDone={load} />
             <h2 className="admin-h2">Oxirgi arizalar</h2>
             <AppsTable rows={apps.slice(0, 8)} onOpen={setDetail} count={false} />
           </>
         );
         break;
       case 'bugun': view = <ShiftsTable rows={lists.bugun} onOpen={setDetail} />; break;
-      case 'ishchilar': case 'bizneslar': case 'bloklangan':
+      case 'ishchilar': case 'bizneslar': case 'bloklangan': case 'obunachilar':
         view = <UsersTable rows={lists[tab]} onOpen={setDetail} onBlock={setBlocked} />; break;
       case 'ochiq': case 'yopilgan':
         view = <ShiftsTable rows={lists[tab]} onOpen={setDetail} />; break;
@@ -328,6 +367,7 @@ export default function AdminPanel() {
         </div>
         {!data ? <p className="lead">Ma’lumotlar yuklanmoqda…</p> : <main id="asosiy">{view}</main>}
       </div>
+      <Farbo admin={{ onOpen: setDetail }} />
       {detail && <Detail target={detail} onOpen={setDetail} onClose={closeDetail} onChanged={load} />}
     </div>
   );

@@ -713,3 +713,34 @@ button.stat:hover { transform: translateY(-2px); }
 .farbo-opts { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0 14px 12px; font-size: .86rem; color: var(--paper-ink); }
 .farbo-opts label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 @media (prefers-reduced-motion: reduce) { .farbo-fab.live .farbo-dot, .farbo-mic.on { animation: none; } }
+.farbo-ref { display: grid; gap: 2px; justify-items: start; padding: 8px 12px; border: 2px solid var(--ink); border-radius: 8px; background: #FFFDF7; color: var(--ink); font: 400 .95rem var(--body); text-align: left; cursor: pointer; }
+.farbo-ref:hover { background: var(--ink); color: var(--paper); }
+.farbo-ref span { font-size: .82rem; color: inherit; opacity: .75; }
+.demo-box { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; margin: 28px 0; padding: 18px 22px; background: var(--paper); border: 2px dashed var(--paper-ink); border-radius: var(--cut); }
+.demo-box .admin-h2 { margin: 0 0 4px; }
+.demo-box .hint { margin: 0; max-width: 60ch; }
+.demo-msg { flex-basis: 100%; margin: 0; font-weight: 700; }
+
+/* Obuna */
+.profile-side { display: grid; gap: 22px; align-content: start; }
+@media (min-width: 900px) { .profile-side { position: sticky; top: 20px; } .profile-side .account { position: static; } }
+.sub-card { display: grid; gap: 14px; }
+.sub-card h2 { margin: 0; }
+.sub-card.is-pro { box-shadow: inset 0 0 0 3px var(--teal), 0 18px 30px -20px rgba(50, 28, 6, .55); }
+.sub-plan { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0; }
+.sub-plan b { font: 400 1.6rem/1.1 var(--marker); }
+.sub-card.is-pro .sub-plan b { color: var(--teal); }
+.sub-plan span { color: var(--paper-ink); font-weight: 600; }
+.usage p { display: flex; justify-content: space-between; gap: 12px; margin: 0 0 6px; }
+.usage b { font-variant-numeric: tabular-nums; }
+.usage-bar { height: 10px; border-radius: 5px; background: var(--paper-shade); overflow: hidden; }
+.usage-bar div { height: 100%; background: var(--teal); }
+.sub-card .hint { margin: 0; }
+.sub-offer { display: grid; gap: 10px; padding-top: 12px; border-top: 2px dashed var(--paper-shade); }
+.sub-offer p { margin: 0; }
+.sub-offer .btn { justify-self: start; }
+.farbo-left { margin-left: auto; font-weight: 700; color: var(--teal); }
+.chip-pro { color: var(--teal); border-color: var(--teal); }
+.plan-control { display: grid; gap: 10px; }
+.plan-control p { margin: 0; }
+.plan-control select { min-height: 36px; padding: 4px 10px; border: 2px solid var(--ink); border-radius: var(--cut); background: #FFFDF7; font: 600 .92rem var(--body); }
