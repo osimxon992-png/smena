@@ -4,11 +4,11 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import Calculator from '@/components/site/Calculator';
 import { SAMPLES, fromShift } from '@/components/site/HangingTags';
-import { som, type Me, type Shift } from '@/lib/client';
+import { SHARE, som, type Me, type Shift } from '@/lib/client';
 
 type Role = Me['role'];
 
-// Ishchi uchun: haftasiga nechta smena olsa, qancha topadi
+// Ishchi uchun: haftasiga nechta smena olsa, Smena ulushidan keyin qo'liga qancha qoladi
 function Earnings({ avgPay }: { avgPay: number }) {
   const [pay, setPay] = useState(avgPay);
   const [n, setN] = useState(3);
@@ -21,11 +21,11 @@ function Earnings({ avgPay }: { avgPay: number }) {
         <label>Haftasiga <output>{n} ta smena</output>
           <input type="range" min={1} max={7} value={n} onChange={(e) => setN(+e.target.value)} /></label>
         <dl>
-          <div><dt>Bir haftada</dt><dd>{som(pay * n)}</dd></div>
-          <div className="fee"><dt>To‘rt haftada</dt><dd>{som(pay * n * 4)}</dd></div>
-          <div><dt>Smena komissiyasi</dt><dd>0 so‘m</dd></div>
+          <div><dt>Bir haftada topasiz</dt><dd>{som(pay * n)}</dd></div>
+          <div><dt>Smena ulushi, {SHARE * 100}%</dt><dd>−{som(Math.round(pay * n * SHARE))}</dd></div>
+          <div className="fee"><dt>To‘rt haftada qo‘lingizga</dt><dd>{som(Math.round(pay * n * 4 * (1 - SHARE)))}</dd></div>
         </dl>
-        <p className="receipt-note">Ishchilar uchun Smena bepul: komissiyani faqat biznes to‘laydi.</p>
+        <p className="receipt-note">Ulush faqat bajarilgan smenadan olinadi: kelmagan yoki bekor qilingan smenadan 0 so‘m.</p>
       </form>
     </div>
   );

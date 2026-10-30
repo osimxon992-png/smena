@@ -8,7 +8,7 @@ import Wipe from '@/components/site/Wipe';
 
 export const metadata: Metadata = {
   title: 'Bizneslar uchun',
-  description: 'Bir kunlik smena e’lon qiling. Komissiya faqat kelgan ishchilar uchun, haqning 15%.',
+  description: 'Bir kunlik smena e’lon qiling: biznes uchun bepul. Kimni olishni o‘zingiz tanlaysiz.',
 };
 
 export default function Business() {
@@ -26,7 +26,7 @@ export default function Business() {
             <ol className="biz-steps">
               <li>Lavozim, sana, vaqt va haqni yozasiz.</li>
               <li>Arizalarni ko‘rib, kerakli odamlarni qabul qilasiz.</li>
-              <li>Smena kuni kelganlarni belgilaysiz. Komissiya faqat kelganlar uchun.</li>
+              <li>Smena kuni kelganlarni belgilaysiz va baholaysiz. E’lon va tanlov bepul.</li>
             </ol>
             <Link className="btn btn-lg" href="/ilova/royxat?rol=biznes">Smena e’lon qilish</Link>
           </div>

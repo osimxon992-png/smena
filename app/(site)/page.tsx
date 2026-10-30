@@ -8,7 +8,7 @@ import Wipe from '@/components/site/Wipe';
 const MORE = [
   ['/qanday-ishlaydi', 'Qanday ishlaydi', 'Arizadan bahogacha to‘rt qadam va ilovani telefonga o‘rnatish.', 'paper'],
   ['/qoidalar', 'Qoidalar', 'Kelmagan bloklanadi, bir kun oldin bekor qilish esa bepul.', 'teal'],
-  ['/bizneslar', 'Bizneslar uchun', 'Smena e’lon qilish va komissiya hisob-kitobi: faqat kelganlar uchun 15%.', 'ink'],
+  ['/bizneslar', 'Bizneslar uchun', 'Smena e’lon qilish va ishchi tanlash: biznes uchun bepul.', 'ink'],
   ['/savollar', 'Savollar', 'To‘lov, bekor qilish va telefon raqami haqida qisqa javoblar.', 'kraft'],
 ];
 

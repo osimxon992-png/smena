@@ -7,14 +7,14 @@ type Who = 'all' | 'worker' | 'business';
 type Item = { q: string; a: React.ReactNode; plain?: string; who: Who };
 
 const FAQ: Item[] = [
-  { who: 'worker', q: 'Ishchilar uchun pullimi?', a: 'Yo‘q. Ro‘yxatdan o‘tish, ariza berish va ishlash bepul. Komissiyani biznes to‘laydi.' },
+  { who: 'worker', q: 'Ishchilar uchun pullimi?', a: 'Ro‘yxatdan o‘tish va ariza berish bepul. Smena bajarilgach, topgan haqingizning 15% i Smena ulushi: masalan, 200 000 so‘mdan 30 000 so‘m, qo‘lingizga 170 000 so‘m qoladi. Kelmagan yoki bekor qilingan smenadan hech narsa olinmaydi.' },
   { who: 'all', q: 'Haqni kim va qachon to‘laydi?', a: 'Haqni ish beruvchi to‘laydi. To‘lov tartibini qabul qilingandan keyin telefon orqali kelishib olasiz.' },
   { who: 'worker', q: 'Bora olmasam nima bo‘ladi?', a: 'Smenadan kamida bir kun oldin arizani bekor qiling: bu bepul va reytingingizga ta’sir qilmaydi. Smena kuni bekor qilib bo‘lmaydi, qabul qilingan smenaga kelmasangiz hisobingiz bloklanadi.' },
   { who: 'worker', q: 'Telefon raqamimni kim ko‘radi?', a: 'Faqat sizni smenaga qabul qilgan ish beruvchi. Ariza bosqichida raqamingiz yashirin turadi.' },
   {
     who: 'business', q: 'Biznes sifatida qancha to‘layman?',
-    a: <>Har bir kelgan ishchi haqining 15%. Ishchi kelmasa, hech narsa to‘lamaysiz. Hisob-kitobni <Link href="/bizneslar#hisob">bizneslar sahifasida</Link> ko‘ring.</>,
-    plain: 'Har bir kelgan ishchi haqining 15%. Ishchi kelmasa, hech narsa to‘lamaysiz. Hisob-kitob komissiya narx',
+    a: <>Smena e’lon qilish va ishchi tanlash bepul: siz faqat ishchilarga kelishilgan haqni to‘laysiz. Smena ulushini (15%) ishchi o‘z haqidan to‘laydi. Hisob-kitobni <Link href="/bizneslar#hisob">bizneslar sahifasida</Link> ko‘ring.</>,
+    plain: 'Smena e’lon qilish va ishchi tanlash bepul: siz faqat ishchilarga kelishilgan haqni to‘laysiz. Smena ulushini (15%) ishchi o‘z haqidan to‘laydi. Hisob-kitob komissiya narx',
   },
   { who: 'business', q: 'Bitta smenaga necha kishi olsa bo‘ladi?', a: 'Bitta e’londa 1 dan 50 kishigacha. Joylar to‘lgach, e’lon ro‘yxatda “Joy qolmadi” bo‘lib turadi.' },
   {

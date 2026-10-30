@@ -6,13 +6,13 @@ import { useState } from 'react';
 const FLOWS = {
   worker: {
     label: 'Ish qidiryapman',
-    steps: ['Ism, telefon va parol bilan ro‘yxatdan o‘ting.', 'Vaqti va haqi mos smenaga ariza bering.', 'Qabul qilinsangiz boring, keyin ish beruvchini baholang.'],
+    steps: ['Ism, telefon va parol bilan ro‘yxatdan o‘ting.', 'Vaqti va haqi mos smenaga ariza bering.', 'Qabul qilinsangiz boring. Haqingizdan 15% Smena ulushi, qolgani sizniki.'],
     href: '/ilova/royxat',
     cta: 'Ishchi bo‘lib ro‘yxatdan o‘tish',
   },
   business: {
     label: 'Menga ishchi kerak',
-    steps: ['Biznes nomi bilan ro‘yxatdan o‘ting.', 'Smena e’lon qiling: sana, vaqt, haq va odam soni.', 'Arizalardan tanlang, kelganlarni belgilang: komissiya faqat ular uchun.'],
+    steps: ['Biznes nomi bilan ro‘yxatdan o‘ting.', 'Smena e’lon qiling: sana, vaqt, haq va odam soni.', 'Arizalardan tanlang, kelganlarni belgilang. E’lon va tanlov bepul.'],
     href: '/ilova/royxat?rol=biznes',
     cta: 'Biznes bo‘lib ro‘yxatdan o‘tish',
   },

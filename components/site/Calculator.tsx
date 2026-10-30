@@ -1,9 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { som } from '@/lib/client';
+import { SHARE, som } from '@/lib/client';
 
-// Komissiya: kelgan ishchilar haqining 15% i
+// Biznes uchun: e'lon va tanlov bepul, faqat ishchilarga haq to'lanadi; Smena ulushini ishchi o'z haqidan to'laydi
 export default function Calculator() {
   const [pay, setPay] = useState(250000);
   const [n, setN] = useState(4);
@@ -16,11 +16,11 @@ export default function Calculator() {
         <label>Kelgan ishchilar <output>{n} kishi</output>
           <input type="range" min={1} max={20} value={n} onChange={(e) => setN(+e.target.value)} /></label>
         <dl>
-          <div><dt>Ishchilarga</dt><dd>{som(pay * n)}</dd></div>
-          <div className="fee"><dt>Smena komissiyasi, 15%</dt><dd>{som(Math.round(pay * n * 0.15))}</dd></div>
-          <div><dt>Ishchi kelmasa</dt><dd>0 so‘m</dd></div>
+          <div><dt>Ishchilarga to‘laysiz</dt><dd>{som(pay * n)}</dd></div>
+          <div className="fee"><dt>Siz uchun komissiya</dt><dd>0 so‘m</dd></div>
+          <div><dt>Har bir ishchi qo‘liga oladi</dt><dd>{som(Math.round(pay * (1 - SHARE)))}</dd></div>
         </dl>
-        <p className="receipt-note">Komissiya faqat kelgan ishchilar uchun olinadi. Ishchilar uchun Smena bepul.</p>
+        <p className="receipt-note">E’lon qilish va ishchi tanlash biznes uchun bepul. Smena ulushini ({SHARE * 100}%) ishchi o‘z haqidan to‘laydi.</p>
       </form>
     </div>
   );

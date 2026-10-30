@@ -16,6 +16,8 @@ export const STATUS: Record<Status, string> = { pending: 'Kutilmoqda', accepted:
 const MONTHS = ['yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun', 'iyul', 'avgust', 'sentabr', 'oktabr', 'noyabr', 'dekabr'];
 const DAYS = ['yakshanba', 'dushanba', 'seshanba', 'chorshanba', 'payshanba', 'juma', 'shanba'];
 
+// Smena ulushi: bajarilgan smena haqining 15% ini ishchi to'laydi; biznes uchun e'lon va tanlov bepul
+export const SHARE = 0.15;
 export const som = (n: number) => `${Number(n).toLocaleString('ru-RU')} so‘m`;
 export const tashkentDate = (plusDays = 0) => new Date(Date.now() + plusDays * 864e5).toLocaleDateString('en-CA', { timeZone: 'Asia/Tashkent' });
 
