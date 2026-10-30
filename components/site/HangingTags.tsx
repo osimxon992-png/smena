@@ -4,9 +4,9 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { day, type Shift } from '@/lib/client';
 
-type TagData = { role: string; pay: number; place: string; when: string; left: string; spent?: boolean; sample?: boolean };
+export type TagData = { role: string; pay: number; place: string; when: string; left: string; spent?: boolean; sample?: boolean };
 
-const SAMPLES: TagData[] = [
+export const SAMPLES: TagData[] = [
   { role: 'Ofitsiant', pay: 250000, place: 'Bahor to‘yxonasi, Yunusobod', when: 'Bugun, 18:00–23:00', left: '5 joy qoldi' },
   { role: 'Buyurtma teruvchi', pay: 220000, place: 'Marketpleys ombori, Sergeli', when: 'Ertaga, 09:00–18:00', left: '7 joy qoldi' },
   { role: 'Oshxona yordamchisi', pay: 200000, place: 'Milliy taomlar oshxonasi, Chilonzor', when: 'Shanba, 10:00–20:00', left: '2 joy qoldi' },
@@ -16,7 +16,7 @@ const SAMPLES: TagData[] = [
 // Ipdagi o'rni (0–1) va ip uzunligi
 const HANG = [[0.1, 28], [0.3, 44], [0.5, 22], [0.7, 40], [0.9, 26]];
 
-const fromShift = (s: Shift): TagData => ({
+export const fromShift = (s: Shift): TagData => ({
   role: s.title, pay: s.pay, place: `${s.org}, ${s.place}`,
   when: `${day(s.date, false)}, ${s.start_time}–${s.end_time}`, left: `${(s.slots ?? 0) - (s.taken ?? 0)} joy qoldi`,
 });

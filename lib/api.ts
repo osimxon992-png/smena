@@ -2,10 +2,13 @@
 // Vercel'da bir nechta nusxa bir vaqtda ishlaydi: "tekshir-keyin-yoz" o'rniga shartli UPDATE/DELETE ishlatiladi.
 import crypto from 'node:crypto';
 import { createClient, type InStatement, type ResultSet } from '@libsql/client';
+import { MIN_AGE, ORG_TYPES, REGIONS, SKILLS } from './options.ts';
 
 type Row = Record<string, any>;
 type User = Row & { id: number; role: 'worker' | 'business'; blocked: number };
-type Ctx = { user: User | undefined; body: Row; id: number; cookieHeader: string; https: boolean; ip: string; cookie?: string };
+// JSON o'rniga qaytariladigan fayl (hozircha faqat profil rasmi)
+type FileOut = { type: string; body: ArrayBuffer };
+type Ctx = { user: User | undefined; body: Row; id: number; cookieHeader: string; https: boolean; ip: string; cookie?: string; file?: FileOut };
 
 // Lokalda smena.db fayli, Vercel'da TURSO_DATABASE_URL (libsql://...) va TURSO_AUTH_TOKEN
 const db = createClient({
@@ -58,9 +61,17 @@ const ready = db.executeMultiple(`
     at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS login_fails_key ON login_fails (key, at);
+  CREATE TABLE IF NOT EXISTS photos (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id),
+    data BLOB NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `).then(async () => {
-  // Google orqali kirganlarning Firebase uid'i. SQLite'da "ADD COLUMN IF NOT EXISTS" yo'q: ustun bor bo'lsa xatoni o'tkazib yuboramiz
-  await exec('ALTER TABLE users ADD COLUMN firebase_uid TEXT').catch((e) => { if (!/duplicate column/i.test(String(e?.message))) throw e; });
+  // Keyin qo'shilgan ustunlar: firebase_uid (Google orqali kirganlar) va profil.
+  // SQLite'da "ADD COLUMN IF NOT EXISTS" yo'q: ustun bor bo'lsa xatoni o'tkazib yuboramiz
+  for (const col of ['firebase_uid', 'first_name', 'last_name', 'birth_date', 'gender', 'region', 'district', 'about', 'skills', 'org_type', 'address']) {
+    await exec(`ALTER TABLE users ADD COLUMN ${col} TEXT`).catch((e) => { if (!/duplicate column/i.test(String(e?.message))) throw e; });
+  }
   await exec('CREATE UNIQUE INDEX IF NOT EXISTS users_firebase_uid ON users (firebase_uid)');
 });
 
@@ -149,11 +160,111 @@ function need(user: User | undefined, role?: User['role']): asserts user is User
   if (role && user!.role !== role) fail(403, role === 'worker' ? 'Bu amal faqat ishchilar uchun' : 'Bu amal faqat bizneslar uchun');
 }
 
+// Toshkent bo'yicha bugungi sanaga ko'ra to'liq yosh
+function age(birth: string | null | undefined) {
+  if (!birth) return null;
+  const today = now().date;
+  const years = Number(today.slice(0, 4)) - Number(birth.slice(0, 4));
+  return today.slice(5) >= birth.slice(5) ? years : years - 1;
+}
+
+// Rasm manzili o'zgarish vaqti bilan: rasm almashsa brauzer keshdan eskisini olmaydi
+const photoUrl = (userId: number, version: string) => `/api/photos/${userId}?v=${encodeURIComponent(version)}`;
+const parseSkills = (s: unknown): string[] => { try { return JSON.parse(String(s || '[]')); } catch { return []; } };
+
+// Profil to'liq bo'lmaguncha ishchi ariza bera olmaydi, biznes smena e'lon qila olmaydi.
+// Ishchidan rasm ham talab qilinadi: biznes kimni qabul qilayotganini ko'rsin
+function isComplete(u: Row, hasPhoto: boolean) {
+  const common = u.first_name && u.last_name && u.region && u.district;
+  return !!(common && (u.role === 'worker' ? u.birth_date && u.gender && hasPhoto : u.org && u.org_type && u.address));
+}
+
+async function needProfile(user: User) {
+  const photo = await one('SELECT 1 FROM photos WHERE user_id = ?', user.id);
+  if (!isComplete(user, !!photo)) fail(403, 'Avval profilingizni to‘ldiring');
+}
+
 async function profile(u: Row) {
-  const stats = u.role === 'worker'
-    ? await one("SELECT ROUND(AVG(worker_rating), 1) rating, COUNT(*) FILTER (WHERE status = 'came') done FROM applications WHERE worker_id = ?", u.id)
-    : await one('SELECT ROUND(AVG(a.business_rating), 1) rating FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE s.business_id = ?', u.id);
-  return { id: u.id, role: u.role, name: u.name, org: u.org, phone: u.phone, blocked: !!u.blocked, ...stats };
+  const [stats, photo] = await Promise.all([
+    u.role === 'worker'
+      ? one("SELECT ROUND(AVG(worker_rating), 1) rating, COUNT(*) FILTER (WHERE status = 'came') done FROM applications WHERE worker_id = ?", u.id)
+      : one('SELECT ROUND(AVG(a.business_rating), 1) rating FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE s.business_id = ?', u.id),
+    one('SELECT updated_at FROM photos WHERE user_id = ?', u.id),
+  ]);
+  return {
+    id: u.id, role: u.role, name: u.name, org: u.org, phone: u.phone, blocked: !!u.blocked,
+    first_name: u.first_name ?? null, last_name: u.last_name ?? null, birth_date: u.birth_date ?? null, age: age(u.birth_date),
+    gender: u.gender ?? null, region: u.region ?? null, district: u.district ?? null, about: u.about ?? '', skills: parseSkills(u.skills),
+    org_type: u.org_type ?? null, address: u.address ?? null,
+    photo: photo ? photoUrl(u.id, photo.updated_at) : null,
+    google: !!u.firebase_uid, complete: isComplete(u, !!photo),
+    ...stats,
+  };
+}
+
+async function updateProfile({ user, body }: Ctx) {
+  need(user);
+  const first = str(body.first_name, 2, 30, 'Ism');
+  const last = str(body.last_name, 2, 30, 'Familiya');
+  // Avval viloyat, keyin shu viloyatning tumani yoki shahri
+  const region = Object.hasOwn(REGIONS, body.region) ? body.region as string : fail(400, 'Qaysi viloyatda yashashingizni tanlang');
+  const district = REGIONS[region].includes(body.district) ? body.district : fail(400, 'Tuman yoki shaharni tanlang');
+  const fields: Row = { first_name: first, last_name: last, name: `${first} ${last}`, region, district, about: typeof body.about === 'string' ? body.about.trim().slice(0, 500) : '' };
+  if (user.role === 'worker') {
+    if (!body.birth_date) fail(400, 'Tug‘ilgan sanangizni kiriting');
+    fields.birth_date = date(body.birth_date);
+    const years = age(fields.birth_date)!;
+    if (years < MIN_AGE) fail(400, `Smenalarda ${MIN_AGE} yoshdan katta bo‘lganlar ishlay oladi`);
+    if (years > 80) fail(400, 'Tug‘ilgan sanani tekshiring');
+    fields.gender = ['m', 'f'].includes(body.gender) ? body.gender : fail(400, 'Jinsingizni tanlang');
+    fields.skills = JSON.stringify(Array.isArray(body.skills) ? [...new Set(body.skills.filter((s: unknown) => SKILLS.includes(s as string)))] : []);
+  } else {
+    fields.org = str(body.org, 2, 80, 'Biznes nomi');
+    fields.org_type = ORG_TYPES.includes(body.org_type) ? body.org_type : fail(400, 'Biznes turini tanlang');
+    fields.address = str(body.address, 5, 160, 'Manzil');
+  }
+  await exec(`UPDATE users SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...Object.values(fields), user.id);
+  return profile((await one('SELECT * FROM users WHERE id = ?', user.id))!);
+}
+
+// Rasm brauzerda 320×320 JPEG qilib kichraytiriladi; server faqat JPEG ekanini va hajmini tekshiradi
+async function setPhoto({ user, body }: Ctx) {
+  need(user);
+  const data = typeof body.data === 'string' ? Buffer.from(body.data, 'base64') : Buffer.alloc(0);
+  if (data.length < 100 || data.length > 200_000 || data[0] !== 0xff || data[1] !== 0xd8 || data[2] !== 0xff) fail(400, 'Rasmni yuklab bo‘lmadi. Boshqa rasm tanlang');
+  await exec(
+    `INSERT INTO photos (user_id, data, updated_at) VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+     ON CONFLICT (user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
+    user.id, data,
+  );
+  return profile(user);
+}
+
+// Rasmlarni faqat kirganlar (va admin) ko'radi
+async function getPhoto(ctx: Ctx) {
+  if (!ctx.user && !isAdmin(ctx.cookieHeader)) fail(401, 'Avval hisobingizga kiring');
+  const p = await one('SELECT data FROM photos WHERE user_id = ?', ctx.id) || fail(404, 'Rasm yo‘q');
+  ctx.file = { type: 'image/jpeg', body: p.data as ArrayBuffer };
+}
+
+async function changePassword(ctx: Ctx) {
+  const { user, body } = ctx;
+  need(user);
+  if (user.firebase_uid) fail(409, 'Siz Google orqali kirasiz: parol kerak emas');
+  const limits: [string, number][] = [[`ip:${ctx.ip}`, 20], [`phone:${user.phone}`, 10]];
+  await checkLimits(limits);
+  if (!verify(String(body.old_password ?? ''), user.pass)) {
+    await recordFail(limits);
+    fail(401, 'Joriy parol noto‘g‘ri');
+  }
+  const password = typeof body.new_password === 'string' ? body.new_password : '';
+  if (password.length < 6 || password.length > 100) fail(400, 'Yangi parol kamida 6 belgidan iborat bo‘lsin');
+  // Boshqa qurilmalardagi kirishlar yopiladi, shu qurilmada yangi sessiya ochiladi
+  await db.batch([
+    { sql: 'UPDATE users SET pass = ? WHERE id = ?', args: [hash(password), user.id] },
+    { sql: 'DELETE FROM sessions WHERE user_id = ?', args: [user.id] },
+  ], 'write');
+  return startSession(ctx, user.id);
 }
 
 async function startSession(ctx: Ctx, userId: number) {
@@ -289,6 +400,7 @@ function listShifts({ user }: Ctx) {
 
 async function createShift({ user, body }: Ctx) {
   need(user, 'business');
+  await needProfile(user);
   const d = date(body.date);
   if (d < now().date) fail(400, 'O‘tgan sanaga smena e’lon qilib bo‘lmaydi');
   const { lastInsertRowid } = await exec(
@@ -310,16 +422,22 @@ async function shiftDetail({ user, id }: Ctx) {
   need(user, 'business');
   const shift = await one(`SELECT s.*, u.org, ${TAKEN} taken FROM shifts s JOIN users u ON u.id = s.business_id WHERE s.id = ? AND s.business_id = ?`, id, user.id)
     || fail(404, 'Smena topilmadi');
-  // Telefon raqam faqat qabul qilingandan keyin ochiladi
+  // Telefon raqam faqat qabul qilingandan keyin ochiladi; profil (rasm, yosh, tuman, ko'nikmalar) darhol ko'rinadi
   const applicants = await all(
-    `SELECT a.id, a.status, a.worker_rating, u.name, u.blocked,
+    `SELECT a.id, a.status, a.worker_rating, u.id worker_id, u.name, u.blocked, u.birth_date, u.gender, u.region, u.district, u.skills, u.about,
        CASE WHEN a.status IN ('accepted', 'came', 'noshow') THEN u.phone END phone,
+       (SELECT updated_at FROM photos WHERE user_id = u.id) photo_v,
        (SELECT ROUND(AVG(worker_rating), 1) FROM applications WHERE worker_id = u.id) rating,
        (SELECT COUNT(*) FROM applications WHERE worker_id = u.id AND status = 'came') done
      FROM applications a JOIN users u ON u.id = a.worker_id WHERE a.shift_id = ? ORDER BY a.id`,
     id,
   );
-  return { shift, applicants };
+  return {
+    shift,
+    applicants: applicants.map(({ worker_id, birth_date, photo_v, skills, ...a }) => ({
+      ...a, age: age(birth_date), skills: parseSkills(skills), photo: photo_v ? photoUrl(worker_id, photo_v) : null,
+    })),
+  };
 }
 
 function myShifts({ user }: Ctx) {
@@ -338,6 +456,7 @@ function myShifts({ user }: Ctx) {
 async function apply({ user, id }: Ctx) {
   need(user, 'worker');
   if (user.blocked) fail(403, 'Qabul qilingan smenaga kelmaganingiz uchun ariza bera olmaysiz');
+  await needProfile(user);
   const s = await one(`SELECT s.*, ${TAKEN} taken FROM shifts s WHERE s.id = ? AND ${OPEN}`, id, ...openArgs())
     || fail(404, 'Smena topilmadi yoki boshlanib bo‘lgan');
   if (s.taken >= s.slots) fail(409, 'Smenada bo‘sh joy qolmadi');
@@ -526,7 +645,9 @@ async function adminSetBlocked(ctx: Ctx) {
 // Parol ko'rsatilmaydi: bazada faqat scrypt xeshi turadi, asl parolni hech kim (admin ham) bila olmaydi.
 async function adminUser(ctx: Ctx) {
   needAdmin(ctx);
-  const u = await one('SELECT id, role, name, org, phone, blocked, created_at FROM users WHERE id = ?', ctx.id) || fail(404, 'Foydalanuvchi topilmadi');
+  const u = await one(
+    `SELECT id, role, name, org, phone, blocked, created_at, first_name, last_name, birth_date, gender, region, district, about, skills, org_type, address, firebase_uid
+     FROM users WHERE id = ?`, ctx.id) || fail(404, 'Foydalanuvchi topilmadi');
   const [stats, sessions, applications, shifts] = await Promise.all([
     profile(u),
     one("SELECT COUNT(*) active, MAX(created_at) last_login FROM sessions WHERE user_id = ? AND created_at > datetime('now', '-30 days')", ctx.id),
@@ -587,6 +708,10 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['POST', /^\/api\/google$/, google],
   ['POST', /^\/api\/logout$/, logout],
   ['GET', /^\/api\/me$/, ({ user }) => user && profile(user)],
+  ['POST', /^\/api\/me\/profile$/, updateProfile],
+  ['POST', /^\/api\/me\/photo$/, setPhoto],
+  ['POST', /^\/api\/me\/password$/, changePassword],
+  ['GET', /^\/api\/photos\/(\d+)$/, getPhoto],
   ['GET', /^\/api\/shifts$/, listShifts],
   ['POST', /^\/api\/shifts$/, createShift],
   ['GET', /^\/api\/shifts\/(\d+)$/, shiftDetail],
@@ -599,7 +724,7 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
 ];
 
 export type ApiRequest = { method: string; path: string; cookie: string | null; contentType: string | null; body: string; https: boolean; ip?: string };
-export type ApiResponse = { status: number; data: unknown; cookie?: string };
+export type ApiResponse = { status: number; data: unknown; cookie?: string; file?: FileOut };
 
 export async function handle(req: ApiRequest): Promise<ApiResponse> {
   const ctx: Ctx = { user: undefined, body: {}, id: 0, cookieHeader: req.cookie ?? '', https: req.https, ip: req.ip || 'unknown' };
@@ -611,12 +736,13 @@ export async function handle(req: ApiRequest): Promise<ApiResponse> {
     if (req.method === 'POST') {
       // JSON talabi boshqa saytlardan forma orqali so'rov yuborishni (CSRF) to'sadi
       if (!String(req.contentType).startsWith('application/json')) fail(415, 'JSON kerak');
-      if (req.body.length > 10_000) fail(413, 'So‘rov juda katta');
+      // Rasm (base64, ~270 KB gacha) uchun alohida chegara
+      if (req.body.length > (route[2] === setPhoto ? 300_000 : 10_000)) fail(413, 'So‘rov juda katta');
       let parsed: unknown = {};
       try { parsed = req.body ? JSON.parse(req.body) : {}; } catch { fail(400, 'Noto‘g‘ri so‘rov'); }
       ctx.body = parsed && typeof parsed === 'object' ? (parsed as Row) : {};
     }
-    return { status: 200, data: (await route[2](ctx)) ?? null, cookie: ctx.cookie };
+    return { status: 200, data: (await route[2](ctx)) ?? null, cookie: ctx.cookie, file: ctx.file };
   } catch (err) {
     if (err instanceof HttpError) return { status: err.status, data: { error: err.message }, cookie: ctx.cookie };
     console.error(err);

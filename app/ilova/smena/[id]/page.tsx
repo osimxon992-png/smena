@@ -3,10 +3,14 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useGuard, useLoad } from '@/components/app/AppShell';
+import Avatar from '@/components/app/Avatar';
 import { ActionButton, Empty, StarsForm, Ticket } from '@/components/app/parts';
 import { api, STATUS, tashkentDate, type Shift, type Status } from '@/lib/client';
 
-type Applicant = { id: number; status: Status; worker_rating: number | null; name: string; blocked: number; phone: string | null; rating: number | null; done: number };
+type Applicant = {
+  id: number; status: Status; worker_rating: number | null; name: string; blocked: number; phone: string | null; rating: number | null; done: number;
+  photo: string | null; age: number | null; gender: 'm' | 'f' | null; region: string | null; district: string | null; skills: string[]; about: string | null;
+};
 
 export default function ShiftApplicants() {
   const me = useGuard('business');
@@ -29,13 +33,19 @@ export default function ShiftApplicants() {
           {applicants.map((a) => (
             <li key={a.id} className="person">
               <div className="person-head">
-                <div>
-                  <strong>{a.name}</strong>{a.blocked ? <> <span className="chip chip-noshow">Bloklangan</span></> : null}
-                  <p className="muted">{a.rating ? `★ ${a.rating}, ` : 'Yangi ishchi, '}{a.done} ta smena bajargan</p>
-                  {a.phone && <p><a href={`tel:${a.phone}`}>{a.phone}</a></p>}
+                <div className="person-who">
+                  <Avatar photo={a.photo} name={a.name} className="avatar-md" />
+                  <div>
+                    <strong>{a.name}</strong>{a.blocked ? <> <span className="chip chip-noshow">Bloklangan</span></> : null}
+                    <p className="muted">{[a.age && `${a.age} yosh`, a.gender && (a.gender === 'm' ? 'erkak' : 'ayol'), a.district, a.region].filter(Boolean).join(', ')}</p>
+                    <p className="muted">{a.rating ? `★ ${a.rating}, ` : 'Yangi ishchi, '}{a.done} ta smena bajargan</p>
+                    {a.phone && <p><a href={`tel:${a.phone}`}>{a.phone}</a></p>}
+                  </div>
                 </div>
                 <p className={`chip chip-${a.status}`}>{STATUS[a.status]}</p>
               </div>
+              {a.skills.length > 0 && <ul className="skill-list">{a.skills.map((s) => <li key={s}>{s}</li>)}</ul>}
+              {a.about && <p className="person-about">{a.about}</p>}
               {a.status === 'pending' && (
                 <div className="actions">
                   <ActionButton run={() => decide(a, 'accept')} done="Ishchi qabul qilindi">Qabul qilish</ActionButton>

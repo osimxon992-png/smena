@@ -5,7 +5,12 @@ export type Shift = {
   my_status?: Status | null; pending?: number;
 };
 export type Status = 'pending' | 'accepted' | 'rejected' | 'came' | 'noshow';
-export type Me = { id: number; role: 'worker' | 'business'; name: string; org: string | null; phone: string; blocked: boolean; rating: number | null; done?: number };
+export type Me = {
+  id: number; role: 'worker' | 'business'; name: string; org: string | null; phone: string; blocked: boolean; rating: number | null; done?: number;
+  first_name: string | null; last_name: string | null; birth_date: string | null; age: number | null; gender: 'm' | 'f' | null;
+  region: string | null; district: string | null; about: string; skills: string[]; org_type: string | null; address: string | null;
+  photo: string | null; google: boolean; complete: boolean;
+};
 
 export const STATUS: Record<Status, string> = { pending: 'Kutilmoqda', accepted: 'Qabul qilindi', rejected: 'Rad etildi', came: 'Bajarildi', noshow: 'Kelmadi' };
 const MONTHS = ['yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun', 'iyul', 'avgust', 'sentabr', 'oktabr', 'noyabr', 'dekabr'];

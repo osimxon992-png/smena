@@ -16,6 +16,10 @@ async function respond(req: Request) {
     // Vercel bu sarlavhalarni o'zi yozadi (mijoz soxtalashtira olmaydi); proksisiz serverda ularga ishonib bo'lmaydi
     ip: req.headers.get('x-real-ip') || req.headers.get('x-forwarded-for')?.split(',')[0].trim() || undefined,
   });
+  // Rasm: manzilda versiya (?v=) bor, shuning uchun brauzer uni uzoq saqlay oladi; faqat shu foydalanuvchining brauzerida (private)
+  if (res.file) {
+    return new Response(res.file.body, { headers: { 'Content-Type': res.file.type, 'Cache-Control': 'private, max-age=31536000, immutable' } });
+  }
   return new Response(JSON.stringify(res.data ?? null), {
     status: res.status,
     headers: {

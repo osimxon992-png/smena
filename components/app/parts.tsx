@@ -72,15 +72,16 @@ export function ActionButton({ className = 'btn', run, done, confirmText, childr
   return <button type="button" className={className} disabled={busy} onClick={click}>{children}</button>;
 }
 
-// Yuborilganda maydonlarni obyekt qilib beradi; xatoni forma ostida ko'rsatadi
-export function useSubmit(handler: (body: Record<string, string>) => Promise<unknown>) {
+// Yuborilganda maydonlarni obyekt qilib beradi (bir nomli bir nechta maydon kerak bo'lsa, ikkinchi argumentdagi FormData'dan); xatoni forma ostida ko'rsatadi
+export function useSubmit(handler: (body: Record<string, string>, form: FormData) => Promise<unknown>) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
     setError('');
-    try { await handler(Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>); }
+    const form = new FormData(e.currentTarget);
+    try { await handler(Object.fromEntries(form) as Record<string, string>, form); }
     catch (err) { setError((err as Error).message); }
     finally { setBusy(false); }
   }

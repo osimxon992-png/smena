@@ -18,6 +18,18 @@ async function call(who: string, path: string, body?: object, contentType = 'app
 }
 const status = async (who: string, path: string, body?: object) => (await call(who, path, body)).status;
 
+// Ariza berish va smena e'lon qilish uchun profil to'liq bo'lishi kerak (ishchida rasm ham)
+const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200)]).toString('base64');
+async function fill(who: string) {
+  const me = (await call(who, '/me')).data;
+  const body = me.role === 'worker'
+    ? { first_name: me.name, last_name: 'Testov', region: 'Toshkent shahri', district: 'Chilonzor', birth_date: '2000-05-01', gender: 'f', skills: ['Ofitsiant'] }
+    : { first_name: me.name, last_name: 'Testov', region: 'Toshkent shahri', district: 'Yunusobod', org: me.org, org_type: 'To‘yxona', address: 'Amir Temur ko‘chasi 1' };
+  assert.equal(await status(who, '/me/profile', body), 200);
+  if (me.role === 'worker') assert.equal(await status(who, '/me/photo', { data: JPEG }), 200);
+  assert.equal((await call(who, '/me')).data.complete, true);
+}
+
 const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Tashkent' });
 const shift = { title: 'Ofitsiant', place: 'Chilonzor 9', date: today, start: '23:59', end: '23:59', pay: 250000, slots: 1 };
 
@@ -27,6 +39,10 @@ assert.equal(await status('x', '/register', { role: 'worker', phone: '931112233'
 assert.equal(await status('x', '/register', { role: 'business', phone: '931112299', name: 'Org yo‘q', password: 'secret1' }), 400, 'biznes nomisiz');
 
 assert.equal(await status('w', '/shifts', shift), 403, 'ishchi smena ochmaydi');
+assert.equal((await call('biz', '/me')).data.complete, false, 'yangi hisob: profil to‘ldirilmagan');
+assert.equal(await status('biz', '/shifts', shift), 403, 'profilsiz smena e’lon qilinmaydi');
+await fill('biz');
+await fill('w');
 assert.equal(await status('biz', '/shifts', { ...shift, date: '2020-01-01' }), 400, 'o‘tgan sana');
 assert.equal(await status('biz', '/shifts', { ...shift, date: '2026-02-30' }), 400, 'yo‘q sana');
 const shiftId = (await call('biz', '/shifts', shift)).data.id;
@@ -51,6 +67,8 @@ detail = (await call('biz', `/shifts/${shiftId}`)).data;
 assert.equal(detail.applicants[0].phone, '+998931112233', 'qabuldan keyin raqam ochiq');
 
 await call('w2', '/register', { role: 'worker', phone: '935556677', name: 'Sardor', password: 'secret1' });
+assert.equal(await status('w2', `/shifts/${shiftId}/apply`, {}), 403, 'profilsiz ariza yo‘q');
+await fill('w2');
 assert.equal(await status('w2', `/shifts/${shiftId}/apply`, {}), 409, 'joy qolmadi');
 
 assert.equal(await status('w', `/applications/${appId}/cancel`, {}), 409, 'smena kuni bekor qilib bo‘lmaydi');
@@ -63,6 +81,7 @@ assert.equal(await status('w', `/shifts/${shift2}/apply`, {}), 403, 'bloklangan 
 
 // Bir joyli smenaga ikki ariza: bir vaqtda qabul qilinsa ham faqat bittasi o'tadi
 await call('w3', '/register', { role: 'worker', phone: '937778899', name: 'Jasur', password: 'secret1' });
+await fill('w3');
 assert.equal(await status('w2', `/shifts/${shift2}/apply`, {}), 200);
 assert.equal(await status('w3', `/shifts/${shift2}/apply`, {}), 200);
 const [first, second] = (await call('biz', `/shifts/${shift2}`)).data.applicants.map((a: any) => a.id);
@@ -101,7 +120,7 @@ assert.equal(await status('adm', `/admin/users/${blockedId}`, { blocked: false }
 assert.equal((await call('w', '/me')).data.blocked, false, 'admin blokdan chiqardi');
 assert.equal(await status('adm', '/admin/users/9999', { blocked: true }), 404);
 assert.equal(await status('adm', `/admin/users/${blockedId}`, { blocked: 'ha' }), 400);
-const sardor = ov.users.find((u: any) => u.name === 'Sardor').id;
+const sardor = ov.users.find((u: any) => u.name === 'Sardor Testov').id;
 const card = (await call('adm', `/admin/users/${sardor}`)).data;
 assert.equal(card.user.phone, '+998935556677');
 assert.equal(card.applications.length, 1, 'ishchining barcha arizalari');
@@ -176,5 +195,45 @@ for (const [bad, why] of [
   ['abc', 'token emas'],
   [undefined, 'token yo‘q'],
 ] as const) assert.equal(await status('g4', '/google', { idToken: bad }), 401, why);
+
+// Profil
+await call('p', '/register', { role: 'worker', phone: '935558001', name: 'Profil', password: 'secret1' });
+const person = { first_name: 'Malika', last_name: 'Qodirova', region: 'Samarqand viloyati', district: 'Urgut', birth_date: '1999-03-15', gender: 'f', skills: ['Kassir', 'Hakker'], about: 'Tez ishlayman' };
+assert.equal(await status('p', '/me/profile', { ...person, birth_date: `${Number(today.slice(0, 4)) - 15}-01-01` }), 400, '16 yoshdan kichik');
+assert.equal(await status('p', '/me/profile', { ...person, district: 'Moskva' }), 400, 'ro‘yxatda yo‘q tuman');
+assert.equal(await status('p', '/me/profile', { ...person, region: 'Moskva viloyati' }), 400, 'ro‘yxatda yo‘q viloyat');
+assert.equal(await status('p', '/me/profile', { ...person, district: 'Chilonzor' }), 400, 'tuman boshqa viloyatniki');
+assert.equal(await status('p', '/me/profile', { ...person, region: 'toString' }), 400, 'obyekt xossasi viloyat emas');
+assert.equal(await status('p', '/me/profile', { ...person, gender: undefined }), 400, 'jinsi tanlanmagan');
+assert.equal(await status('p', '/me/profile', { ...person, first_name: 'M' }), 400, 'ism juda qisqa');
+const pr = (await call('p', '/me/profile', person)).data;
+assert.equal(pr.name, 'Malika Qodirova', 'ism va familiya ko‘rsatiladigan ismga yoziladi');
+assert.deepEqual(pr.skills, ['Kassir'], 'ro‘yxatda yo‘q ko‘nikma tashlanadi');
+assert.ok(pr.age >= 26 && pr.age <= 28);
+assert.equal(pr.complete, false, 'rasmsiz ishchi profili to‘liq emas');
+assert.equal(await status('p', '/me/photo', { data: Buffer.from('\x89PNG' + 'x'.repeat(200)).toString('base64') }), 400, 'faqat JPEG');
+const withPhoto = (await call('p', '/me/photo', { data: JPEG })).data;
+assert.equal(withPhoto.complete, true);
+assert.match(withPhoto.photo, /^\/api\/photos\/\d+\?v=/);
+const photoPath = withPhoto.photo.split('?')[0].replace(/^\/api/, '');
+assert.equal(await status('guest2', photoPath), 401, 'rasmni faqat kirganlar ko‘radi');
+const img = await handle({ method: 'GET', path: '/api' + photoPath, cookie: jar.biz, contentType: null, body: '', https: false });
+assert.equal(img.status, 200);
+assert.deepEqual([...new Uint8Array(img.file!.body).slice(0, 3)], [0xff, 0xd8, 0xff], 'rasm o‘zi qaytadi');
+assert.equal(await status('biz', '/me/profile', { first_name: 'Aziz', last_name: 'Karimov', region: 'Toshkent shahri', district: 'Yunusobod', org: 'Bahor', org_type: 'Kosmodrom', address: 'Amir Temur 1' }), 400, 'biznes turi ro‘yxatdan');
+const biz3 = (await call('biz', '/shifts', { ...shift, slots: 2 })).data.id;
+assert.equal(await status('p', `/shifts/${biz3}/apply`, {}), 200);
+const shown = (await call('biz', `/shifts/${biz3}`)).data.applicants[0];
+assert.deepEqual([shown.name, shown.region, shown.district, shown.skills, shown.photo === withPhoto.photo], ['Malika Qodirova', 'Samarqand viloyati', 'Urgut', ['Kassir'], true], 'biznes arizachining profilini ko‘radi');
+assert.ok(!('birth_date' in shown) && shown.age === pr.age, 'tug‘ilgan sana emas, faqat yosh');
+
+// Parolni almashtirish
+assert.equal(await status('p', '/me/password', { old_password: 'xato12', new_password: 'yangi123' }), 401);
+assert.equal(await status('p', '/me/password', { old_password: 'secret1', new_password: '123' }), 400);
+assert.equal(await status('p', '/me/password', { old_password: 'secret1', new_password: 'yangi123' }), 200);
+assert.equal((await call('p', '/me')).data.id, pr.id, 'shu qurilmada kirgan holda qoladi');
+assert.equal(await status('p2', '/login', { phone: '935558001', password: 'secret1' }), 401, 'eski parol ishlamaydi');
+assert.equal(await status('p2', '/login', { phone: '935558001', password: 'yangi123' }), 200);
+assert.equal(await status('g', '/me/password', { old_password: '', new_password: 'yangi123' }), 409, 'Google hisobida parol yo‘q');
 
 console.log('Hammasi joyida ✓');

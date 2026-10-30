@@ -411,9 +411,10 @@ html.lenis, html.lenis body { height: auto; }
 .form { display: grid; gap: 16px; max-width: 640px; padding: clamp(22px, 3vw, 34px); background: var(--paper); box-shadow: 0 18px 30px -20px rgba(50, 28, 6, .55); }
 .form.narrow { max-width: 440px; }
 .field { display: grid; gap: 6px; font-weight: 600; }
-.field input, .field textarea { width: 100%; min-height: 50px; padding: 10px 14px; border: 2px solid var(--ink); border-radius: var(--cut); background: #FFFDF7; color: var(--ink); font: 400 1rem var(--body); }
+.field input, .field textarea, .field select { width: 100%; min-height: 50px; padding: 10px 14px; border: 2px solid var(--ink); border-radius: var(--cut); background: #FFFDF7; color: var(--ink); font: 400 1rem var(--body); }
 .field textarea { resize: vertical; }
-.field input:focus, .field textarea:focus { outline: 3px solid var(--teal); outline-offset: 1px; }
+.field select { cursor: pointer; }
+.field input:focus, .field textarea:focus, .field select:focus { outline: 3px solid var(--teal); outline-offset: 1px; }
 .field input::placeholder, .field textarea::placeholder { color: #7A6D58; }
 .row { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 .phone { display: flex; }
@@ -424,6 +425,66 @@ html.lenis, html.lenis body { height: auto; }
 .btn-google { gap: 12px; }
 .form .or { display: flex; align-items: center; gap: 12px; margin: 0; color: var(--ink-soft); font-size: .92rem; }
 .form .or::before, .form .or::after { content: ""; flex: 1; border-top: 2px solid currentColor; opacity: .3; }
+
+/* Kirish va ro'yxat: chapda forma, o'ngda ipdagi smenalar va hisob-kitob */
+.auth { display: grid; gap: clamp(40px, 5vw, 64px); align-items: start; }
+@media (min-width: 900px) { .auth { grid-template-columns: minmax(0, 440px) minmax(0, 1fr); } .auth-aside { padding-top: 10px; } }
+.auth-aside { display: grid; gap: 40px; min-width: 0; }
+.auth-board .widget-title { margin-bottom: 4px; }
+.pegs { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
+.pegs::before { content: ''; position: absolute; left: -12px; right: -12px; top: 0; border-top: 3px solid var(--twine); }
+.peg { --tilt: 0deg; min-width: 0; transform-origin: 50% 0; transform: rotate(var(--tilt)); transition: transform .5s cubic-bezier(.34, 1.56, .64, 1); filter: drop-shadow(0 14px 14px rgba(50, 28, 6, .35)); }
+.peg::before { content: ''; display: block; width: 2px; height: 26px; margin: 0 auto -6px; background: var(--twine); }
+.peg:hover, .peg:focus-within { transform: rotate(calc(var(--tilt) * -2)); }
+.peg .tag { padding: 32px 14px 14px; color: var(--ink); text-decoration: none; }
+.peg .tag-pay { font-size: clamp(1.2rem, 1.9vw, 1.45rem); white-space: normal; }
+.peg .tag-sample { position: static; align-self: flex-start; margin-top: 8px; }
+.pegs[aria-busy="true"] .peg { opacity: .5; }
+.aside-calc { display: grid; gap: 18px; }
+.aside-calc .pick-row { justify-self: start; }
+@media (max-width: 560px) {
+  .pegs { grid-template-columns: repeat(3, 72%); overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 12px; margin-inline: calc(var(--pad) * -1); padding-inline: var(--pad); }
+  .pegs::before { left: 0; right: 0; }
+  .peg { scroll-snap-align: center; }
+}
+@media (prefers-reduced-motion: reduce) { .peg { transition: none; } }
+
+/* Profil */
+.avatar { display: inline-grid; place-items: center; flex: none; width: 30px; height: 30px; overflow: hidden; border-radius: 50%; background: var(--kraft-deep); color: var(--paper); font: 700 .8rem/1 var(--body); }
+.avatar img { width: 100%; height: 100%; object-fit: cover; }
+.avatar-md { width: 56px; height: 56px; font-size: 1.1rem; box-shadow: 0 0 0 3px var(--paper), 0 0 0 5px var(--ink); }
+.avatar-lg { width: 112px; height: 112px; font: 400 2.4rem/1 var(--marker); box-shadow: 0 0 0 4px var(--paper), 0 0 0 7px var(--ink); transform: rotate(-3deg); }
+.top nav a.nav-me { display: inline-flex; align-items: center; gap: 8px; padding-block: 5px; }
+.profile-grid { display: grid; gap: 28px; align-items: start; }
+@media (min-width: 900px) { .profile-grid { grid-template-columns: minmax(0, 640px) minmax(0, 1fr); } .account { position: sticky; top: 20px; } }
+.profile-main { display: grid; gap: 22px; }
+.photo-pick { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+.photo-pick p { margin: 0 0 8px; }
+.photo-label { font-weight: 700; }
+.req { color: var(--red); font-weight: 600; }
+.profile-form h2, .account h2 { margin: 0; }
+.row-2 { display: grid; gap: 16px; }
+@media (min-width: 560px) { .row-2 { grid-template-columns: 1fr 1fr; } }
+.roles.gender span { min-height: 50px; }
+.checks { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; border: 0; }
+.checks legend { width: 100%; margin-bottom: 8px; padding: 0; font-weight: 600; }
+.checks label { position: relative; }
+.checks input { position: absolute; opacity: 0; }
+.checks label > span { display: inline-block; padding: 8px 13px; border: 2px solid var(--ink); border-radius: var(--cut); background: #FFFDF7; font-weight: 600; cursor: pointer; transition: transform .15s ease; }
+.checks label > span:hover { transform: rotate(-1.5deg); }
+.checks input:checked + span { background: var(--ink); color: var(--paper); }
+.checks input:checked + span::before { content: '✓ '; }
+.checks input:focus-visible + span { outline: 3px solid var(--teal); outline-offset: 2px; }
+.account { display: grid; gap: 18px; }
+.facts { display: grid; gap: 10px; margin: 0; }
+.facts div { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 2px dashed var(--paper-shade); }
+.facts dt { color: var(--paper-ink); }
+.facts dd { margin: 0; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+.pw-form { display: grid; gap: 14px; }
+.person-who { display: flex; align-items: center; gap: 14px; }
+.skill-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.skill-list li { padding: 2px 9px; border-radius: 4px; background: var(--paper-shade); font-size: .86rem; font-weight: 600; }
+.person-about { color: var(--ink-soft); font-size: .95rem; }
 .roles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0; padding: 0; border: 0; }
 .roles legend { margin-bottom: 6px; padding: 0; font-weight: 600; }
 .roles label { position: relative; }
