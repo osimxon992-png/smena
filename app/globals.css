@@ -744,3 +744,4 @@ button.stat:hover { transform: translateY(-2px); }
 .plan-control { display: grid; gap: 10px; }
 .plan-control p { margin: 0; }
 .plan-control select { min-height: 36px; padding: 4px 10px; border: 2px solid var(--ink); border-radius: var(--cut); background: #FFFDF7; font: 600 .92rem var(--body); }
+.show-pass { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; }

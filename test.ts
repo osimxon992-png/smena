@@ -174,6 +174,13 @@ for (let i = 0; i < 9; i++) assert.equal(await from(`10.0.4.${i}`, '/login', wro
 
 for (let i = 0; i < 10; i++) assert.equal(await from('10.0.5.1', '/admin/login', { password: 'xato' }), 401);
 assert.equal(await from('10.0.5.1', '/admin/login', { password: 'test-admin-parol' }), 200, 'admin: xato paroldan keyin kutish yo‘q');
+assert.equal(await from('10.0.5.3', '/admin/login', { password: '  test-admin-parol \n' }), 200, 'kiritilgan paroldagi bo‘shliq xalaqit bermaydi');
+process.env.ADMIN_PASSWORD = '"test-admin-parol"\n';
+assert.equal(await from('10.0.5.3', '/admin/login', { password: 'test-admin-parol' }), 200, 'Vercel’dagi qo‘shtirnoq va qator oxiri xalaqit bermaydi');
+process.env.ADMIN_PASSWORD = 'test-admin-parol\u200B';
+assert.equal(await from('10.0.5.3', '/admin/login', { password: 'test-admin-parol' }), 200, 'ko‘rinmas belgi xalaqit bermaydi');
+assert.equal(await from('10.0.5.3', '/admin/login', { password: 'test-admin-paro' }), 401, 'boshqa parol baribir o‘tmaydi');
+process.env.ADMIN_PASSWORD = 'test-admin-parol';
 
 // Google orqali kirish
 const tok = googleToken('uid-1');

@@ -881,11 +881,15 @@ function wavHeader(bytes: number, rate: number) {
 // Parol almashtirilsa, barcha admin sessiyalari o'z-o'zidan bekor bo'ladi.
 
 const ADMIN_TTL = 12 * 3600;
-const adminSign = (exp: number) => crypto.createHmac('sha256', process.env.ADMIN_PASSWORD!).update(`smena-admin:${exp}`).digest('base64url');
+// Nusxa olishda (Vercel'ga yoki kirish oynasiga) qo'shilib qoladigan bo'shliq, qator oxiri, qo'shtirnoq va ko'rinmas belgilar
+// to'g'ri parolni "noto'g'ri" qilib qo'ymasin: ikkala tomon ham bir xil tozalanadi
+const cleanSecret = (s: string) => s.normalize('NFKC').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim().replace(/^(['"])(.*)\1$/s, '$2').trim();
+const adminSecret = () => cleanSecret(process.env.ADMIN_PASSWORD ?? '');
+const adminSign = (exp: number) => crypto.createHmac('sha256', adminSecret()).update(`smena-admin:${exp}`).digest('base64url');
 const sameSecret = (a: string, b: string) => crypto.timingSafeEqual(crypto.createHash('sha256').update(a).digest(), crypto.createHash('sha256').update(b).digest());
 
 function isAdmin(cookieHeader: string) {
-  if (!process.env.ADMIN_PASSWORD) return false;
+  if (!adminSecret()) return false;
   const m = /(?:^|;\s*)adm=(\d+)\.([\w-]+)/.exec(cookieHeader);
   return !!m && Number(m[1]) > Date.now() / 1000 && sameSecret(m[2], adminSign(Number(m[1])));
 }
@@ -896,8 +900,13 @@ function needAdmin(ctx: Ctx) {
 
 // Egasining talabi bilan urinishlar cheklanmaydi (xato paroldan keyin kutish yo'q): parol uzun va tasodifiy bo'lishi shart
 async function adminLogin(ctx: Ctx) {
-  const secret = process.env.ADMIN_PASSWORD || fail(503, 'Admin paneli yoqilmagan: serverda ADMIN_PASSWORD o‘rnatilmagan');
-  if (!sameSecret(String(ctx.body.password ?? ''), secret)) fail(401, 'Parol noto‘g‘ri');
+  const secret = adminSecret() || fail(503, 'Admin paneli yoqilmagan: serverda ADMIN_PASSWORD o‘rnatilmagan');
+  const given = cleanSecret(String(ctx.body.password ?? ''));
+  if (!sameSecret(given, secret)) {
+    // Faqat uzunliklar (parolning o'zi emas): Vercel loglarida qaysi parol o'rnatilganini taxmin qilishga yordam beradi
+    console.warn(`Admin kirish: parol mos kelmadi (kiritilgani ${given.length} belgi, ADMIN_PASSWORD ${secret.length} belgi)`);
+    fail(401, 'Parol noto‘g‘ri');
+  }
   const exp = Math.floor(Date.now() / 1000) + ADMIN_TTL;
   ctx.cookie = `adm=${exp}.${adminSign(exp)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${ADMIN_TTL}${ctx.https ? '; Secure' : ''}`;
   return { ok: true };
@@ -1139,7 +1148,7 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['GET', /^\/api\/admin\/shifts\/(\d+)$/, adminShift],
   ['POST', /^\/api\/admin\/login$/, adminLogin],
   ['POST', /^\/api\/admin\/logout$/, adminLogout],
-  ['GET', /^\/api\/admin\/me$/, (ctx) => ({ enabled: !!process.env.ADMIN_PASSWORD, admin: isAdmin(ctx.cookieHeader) })],
+  ['GET', /^\/api\/admin\/me$/, (ctx) => ({ enabled: !!adminSecret(), admin: isAdmin(ctx.cookieHeader) })],
   ['GET', /^\/api\/admin\/overview$/, adminOverview],
   ['POST', /^\/api\/admin\/ai$/, askFarboAdmin],
   ['POST', /^\/api\/admin\/demo$/, adminDemo],

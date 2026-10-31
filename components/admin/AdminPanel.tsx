@@ -38,6 +38,7 @@ const Name = ({ text, onClick }: { text: string; onClick: () => void }) => <butt
 
 function Login({ onDone }: { onDone: () => void }) {
   const [error, setError] = useState('');
+  const [show, setShow] = useState(false);
   return (
     <form className="form narrow" onSubmit={async (e) => {
       e.preventDefault();
@@ -45,9 +46,16 @@ function Login({ onDone }: { onDone: () => void }) {
       try { await api('/admin/login', { password: new FormData(e.currentTarget).get('password') }); onDone(); }
       catch (err) { setError((err as Error).message); }
     }}>
-      <label className="field"><span>Admin paroli</span><input type="password" name="password" required autoComplete="current-password" /></label>
+      {/* Telefon klaviaturasi parolni o'zgartirmasin; "Ko'rsatish" bilan nima yozilganini tekshirish mumkin */}
+      <label className="field"><span>Admin paroli</span>
+        <input type={show ? 'text' : 'password'} name="password" required autoComplete="current-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
+      </label>
+      <label className="show-pass"><input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} /> Parolni ko‘rsatish</label>
       <button className="btn btn-lg" type="submit">Kirish</button>
       {error && <p className="form-error" role="alert">{error}</p>}
+      {error.includes('noto‘g‘ri') && (
+        <p className="hint">Parol saytdagi <b>ADMIN_PASSWORD</b> bilan aynan bir xil bo‘lishi kerak (lokalda <code>.env.local</code>, jonli saytda Vercel → Settings → Environment Variables). Vercel’da o‘zgartirgan bo‘lsangiz, Redeploy qiling.</p>
+      )}
     </form>
   );
 }
