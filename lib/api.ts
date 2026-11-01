@@ -449,7 +449,11 @@ const tgToken = () => cleanSecret(process.env.TELEGRAM_BOT_TOKEN ?? '');
 // Webhook'ning maxfiy sarlavhasi tokendan olinadi: alohida sozlama shart emas, token almashsa u ham almashadi
 const tgSecret = () => (tgToken() ? crypto.createHash('sha256').update(`smena-webhook:${tgToken()}`).digest('hex').slice(0, 32) : '');
 const CODE_TTL = "datetime('now', '-5 minutes')";
-const NOT_LINKED = `Kod Telegram orqali keladi. Avval t.me/${TELEGRAM_BOT} botini oching, /start bosing va “📱 Raqamni yuborish” tugmasini bosing. Keyin shu yerda qayta urinib ko‘ring`;
+const prettyPhone = (p: string) => p.replace(/^\+998(\d{2})(\d{3})(\d{2})(\d{2})$/, '+998 $1 $2 $3 $4');
+// Qaysi raqam bog'lanmaganini aytamiz: ko'pincha Telegram hisobidagi raqam saytda yozilganidan boshqacha bo'ladi
+const notLinked = (p: string) =>
+  `${prettyPhone(p)} raqami botga bog‘lanmagan. t.me/${TELEGRAM_BOT} botida /start bosing va pastdagi “📱 Raqamni yuborish” tugmasini bosing (raqamni qo‘lda yozmang). `
+  + 'Telegram hisobingizdagi raqam saytda yozganingiz bilan bir xil bo‘lishi kerak.';
 
 async function telegram(method: string, body: Row) {
   if (!tgToken()) fail(503, 'Telegram bot hali sozlanmagan: serverda TELEGRAM_BOT_TOKEN yo‘q');
@@ -465,7 +469,7 @@ const codeHash = (p: string, code: string) => crypto.createHmac('sha256', tgToke
 
 // Bir raqamga: ishlatilmagan kod bo'lsa, qayta yuborish 1 daqiqadan keyin; soatiga ko'pi bilan 5 ta kod
 async function sendCode(p: string) {
-  const link = await one('SELECT chat_id FROM telegram_links WHERE phone = ?', p) || fail(428, NOT_LINKED);
+  const link = await one('SELECT chat_id FROM telegram_links WHERE phone = ?', p) || fail(428, notLinked(p));
   const recent = await one(
     `SELECT COUNT(*) FILTER (WHERE used = 0 AND created_at > datetime('now', '-60 seconds')) fresh, COUNT(*) n
      FROM otp_codes WHERE phone = ? AND created_at > datetime('now', '-1 hour')`, p);
@@ -523,7 +527,12 @@ async function telegramWebhook(ctx: Ctx) {
        ON CONFLICT (phone) DO UPDATE SET chat_id = excluded.chat_id, updated_at = datetime('now')`,
       `+${digits}`, chat,
     );
-    await reply(`✅ Raqamingiz bog‘landi: +${digits}\n\nEndi saytga qaytib, kod so‘rang — u shu chatga keladi.`, { reply_markup: { remove_keyboard: true } });
+    await reply(`✅ Raqamingiz bog‘landi: ${prettyPhone(`+${digits}`)}\n\nEndi saytga qaytib, aynan shu raqamni kiriting va kod so‘rang — kod shu chatga keladi.`, { reply_markup: { remove_keyboard: true } });
+    return { ok: true };
+  }
+  // Raqamni qo'lda yozib yuborganlar: Telegram tasdiqlamagan raqamni qabul qilmaymiz, tugmani ko'rsatamiz
+  if (typeof msg.text === 'string' && /^\+?[\d\s()-]{9,}$/.test(msg.text.trim())) {
+    await reply('Raqamni yozish shart emas: pastdagi “📱 Raqamni yuborish” tugmasini bosing — Telegram raqamingizni o‘zi yuboradi.', { reply_markup: CONTACT_KEYBOARD });
     return { ok: true };
   }
   await reply(

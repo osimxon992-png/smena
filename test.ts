@@ -297,6 +297,7 @@ const newbie = { role: 'worker', phone: '935559001', name: 'Yangi', password: 's
 const notLinked = await call('s', '/register/check', newbie);
 assert.equal(notLinked.status, 428, 'raqam botga bog‘lanmagan');
 assert.match(notLinked.data.error, /t\.me\/smenauzbbot/, 'xabarda bot havolasi');
+assert.match(notLinked.data.error, /\+998 93 555 90 01 raqami botga bog‘lanmagan/, 'xabarda qaysi raqam');
 assert.equal((await tg({ message: { chat: { id: 1, type: 'private' }, from: { id: 1 }, text: '/start' } }, 'xato')).status, 401, 'webhook maxfiy kalitsiz ishlamaydi');
 process.env.TELEGRAM_BOT_TOKEN = ' "123:test"\n';
 assert.equal((await tg({ message: { chat: { id: 1, type: 'private' }, from: { id: 1 }, text: '/start' } })).status, 200, 'Vercel’dagi bo‘shliq va qo‘shtirnoq tokenni buzmaydi');
@@ -310,6 +311,9 @@ assert.match(tgSent.at(-1).text, /o‘zingizning raqamingizni/, 'boshqa odamning
 assert.equal(await status('s', '/register/check', newbie), 428, 'begona kontakt raqamni bog‘lamadi');
 await tg({ message: { chat: { id: 902, type: 'private' }, from: { id: 902 }, contact: { phone_number: '79001234567', user_id: 902 } } });
 assert.match(tgSent.at(-1).text, /\+998/, 'faqat O‘zbekiston raqamlari');
+await tg({ message: { chat: { id: 903, type: 'private' }, from: { id: 903 }, text: '+998 93 555 90 01' } });
+assert.match(tgSent.at(-1).text, /Raqamni yozish shart emas/, 'qo‘lda yozilgan raqam: tugmani ko‘rsatadi');
+assert.ok(tgSent.at(-1).reply_markup.keyboard[0][0].request_contact);
 const newbieChat = await linkTg('935559001');
 assert.deepEqual((await call('s', '/register/check', newbie)).data, { phone: '+998935559001', bot: 'smenauzbbot' }, 'kod Telegram’ga yuborildi');
 assert.equal(tgSent.at(-1).chat_id, newbieChat, 'kod raqam bog‘langan chatga keladi');
