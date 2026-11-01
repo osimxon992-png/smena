@@ -170,6 +170,47 @@ function DemoControl({ count, onDone }: { count: number; onDone: () => Promise<v
   );
 }
 
+type BotStatus = { configured: boolean; bot?: string | null; webhook?: string; connected?: boolean; last_error?: string | null; linked?: number };
+
+// Tasdiqlash kodlari keladigan Telegram bot: holati va bir bosishda ulash (webhook shu saytga o'rnatiladi)
+function TelegramBox() {
+  const [st, setSt] = useState<BotStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  useEffect(() => { api<BotStatus>('/admin/telegram').then(setSt).catch((e: Error) => setMsg(e.message)); }, []);
+  async function connect() {
+    setBusy(true);
+    setMsg('');
+    try {
+      setSt(await api<BotStatus>('/admin/telegram', { action: 'connect' }));
+      setMsg('Bot ulandi: endi kodlar Telegram orqali keladi');
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="demo-box">
+      <div>
+        <h2 className="admin-h2">Telegram bot</h2>
+        <p className="hint">
+          {!st ? 'Tekshirilmoqda…'
+            : !st.configured ? 'Serverda TELEGRAM_BOT_TOKEN yo‘q: Vercel → Environment Variables ga qo‘shing va Redeploy qiling.'
+            : st.connected ? `@${st.bot} ulangan. Raqamini bog‘laganlar: ${st.linked} ta.${st.last_error ? ` Oxirgi xato: ${st.last_error}` : ''}`
+            : `@${st.bot} hali shu saytga ulanmagan: foydalanuvchilar /start bosganda bot javob bermaydi.`}
+        </p>
+      </div>
+      {st?.configured && (
+        <div className="actions">
+          <button type="button" className="btn" disabled={busy} onClick={connect}>{st.connected ? 'Qayta ulash' : 'Botni ulash'}</button>
+        </div>
+      )}
+      {msg && <p className="demo-msg" role="status">{msg}</p>}
+    </section>
+  );
+}
+
 export default function AdminPanel() {
   const [access, setAccess] = useState<{ enabled: boolean; admin: boolean } | null>(null);
   const [data, setData] = useState<Overview | null>(null);
@@ -308,6 +349,7 @@ export default function AdminPanel() {
               ))}
               <button type="button" className="stat money" onClick={() => setTab('moliya')}><strong>{som(s.commission)}</strong><span>Komissiya, 15% ({som(s.paid)} ish haqidan)</span></button>
             </div>
+            <TelegramBox />
             <DemoControl count={data.shifts.filter((x) => x.org.endsWith('(demo)')).length} onDone={load} />
             <h2 className="admin-h2">Oxirgi arizalar</h2>
             <AppsTable rows={apps.slice(0, 8)} onOpen={setDetail} count={false} />

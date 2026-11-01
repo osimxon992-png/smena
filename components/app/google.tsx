@@ -6,7 +6,7 @@ import { api, type Me } from '@/lib/client';
 import { googleIdToken, preloadFirebase } from '@/lib/firebase';
 import { home, useApp } from './AppShell';
 import { Field, PhoneInput, ProfileFields, useSubmit } from './parts';
-import { SmsCodeForm, useSmsStep } from './sms';
+import { BotHint, CodeForm, ErrorText, useCodeStep } from './sms';
 
 export type GoogleSignup = { idToken: string; name: string };
 
@@ -56,32 +56,38 @@ export function GoogleButton({ onSignup }: { onSignup: (s: GoogleSignup) => void
   );
 }
 
-// Google tasdiqlagandan keyin: rol, ism va telefon (parol kerak emas, telefon SMS kod bilan tasdiqlanadi)
+// Google tasdiqlagandan keyin: rol, ism va telefon (parol kerak emas, telefon Telegram kodi bilan tasdiqlanadi)
 export function GoogleSignupForm({ signup, business, onCancel }: { signup: GoogleSignup; business: boolean; onCancel: () => void }) {
   const { setMe } = useApp();
   const router = useRouter();
-  const sms = useSmsStep();
+  const sms = useCodeStep();
   const { onSubmit, error, busy } = useSubmit(async (body) => {
-    const { phone } = await api<{ phone: string }>('/register/check', { ...body, google: true });
-    await sms.start(phone, async (phoneToken) => {
-      const user = await api<Me>('/google', { ...body, idToken: signup.idToken, phoneToken });
-      setMe(user);
-      router.push(home(user));
+    const check = () => api<{ phone: string }>('/register/check', { ...body, google: true });
+    const { phone } = await check();
+    sms.start({
+      phone,
+      finish: async (code) => {
+        const user = await api<Me>('/google', { ...body, idToken: signup.idToken, code });
+        setMe(user);
+        router.push(home(user));
+      },
+      resend: check,
     });
   });
 
   return (
     <>
-      {sms.step && <SmsCodeForm step={sms.step} onBack={sms.cancel} />}
+      {sms.step && <CodeForm step={sms.step} onBack={sms.cancel} />}
       {/* Kod kutilayotganda forma yashirinadi, lekin yo'qolmaydi: "Raqamni o'zgartirish" bosilsa, kiritilganlar joyida */}
       <div hidden={!!sms.step}>
         <h1>Ro‘yxatni yakunlash</h1>
         <form className="form narrow" onSubmit={onSubmit}>
-          <p>Google hisobingiz tasdiqlandi. Telefon raqamingizga tasdiqlash kodi keladi; raqam smenaga qabul qilingandan keyin ikkinchi tomonga ko‘rinadi.</p>
+          <p>Google hisobingiz tasdiqlandi. Telefon raqamingiz smenaga qabul qilingandan keyin ikkinchi tomonga ko‘rinadi.</p>
           <ProfileFields business={business} name={signup.name} />
           <Field label="Telefon raqam"><PhoneInput /></Field>
+          <BotHint />
           <button className="btn btn-lg" type="submit" disabled={busy}>Kod olish</button>
-          {error && <p className="form-error" role="alert">{error}</p>}
+          {error && <ErrorText text={error} />}
           <button className="btn btn-ghost" type="button" onClick={onCancel}>Orqaga</button>
         </form>
       </div>

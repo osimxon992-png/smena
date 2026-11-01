@@ -17,6 +17,9 @@ async function respond(req: Request) {
     https: url.protocol === 'https:' || req.headers.get('x-forwarded-proto') === 'https',
     // Vercel bu sarlavhalarni o'zi yozadi (mijoz soxtalashtira olmaydi); proksisiz serverda ularga ishonib bo'lmaydi
     ip: req.headers.get('x-real-ip') || req.headers.get('x-forwarded-for')?.split(',')[0].trim() || undefined,
+    // Telegram webhook'ni tekshirish uchun; origin — bot ulanadigan sayt manzili
+    tgSecret: req.headers.get('x-telegram-bot-api-secret-token'),
+    origin: `${req.headers.get('x-forwarded-proto') || url.protocol.replace(':', '')}://${req.headers.get('x-forwarded-host') || url.host}`,
   });
   // Rasm: manzilda versiya (?v=) bor, shuning uchun brauzer uni uzoq saqlay oladi; faqat shu foydalanuvchining brauzerida (private)
   if (res.file) {

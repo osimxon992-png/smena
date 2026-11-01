@@ -9,6 +9,30 @@ process.env.ADMIN_PASSWORD = 'test-admin-parol';
 const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 process.env.FIREBASE_KEYS_URL = 'data:application/json,' + encodeURIComponent(JSON.stringify({ keys: [{ ...publicKey.export({ format: 'jwk' }), kid: 'sinov', alg: 'RS256' }] }));
 // Baza manzili import paytida o'qiladi, shuning uchun api muhit o'rnatilgandan keyin yuklanadi
+// Telegram'ni soxta server almashtiradi: bot yuborgan xabarlar tgSent ga yig'iladi
+const tgSent: any[] = [];
+let tgFail = false;
+let tgHook = '';
+const tgFake = http.createServer((req, res) => {
+  let b = '';
+  req.on('data', (c) => (b += c));
+  req.on('end', () => {
+    const method = req.url!.split('/').pop()!;
+    const body = b ? JSON.parse(b) : {};
+    tgSent.push({ method, ...body });
+    if (method === 'setWebhook') tgHook = body.url;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(
+      tgFail && method === 'sendMessage' ? { ok: false, description: 'Forbidden: bot was blocked by the user' }
+        : method === 'getWebhookInfo' ? { ok: true, result: { url: tgHook } }
+        : method === 'getMe' ? { ok: true, result: { username: 'smenauzbbot' } }
+        : { ok: true, result: true },
+    ));
+  });
+});
+await new Promise<void>((r) => tgFake.listen(0, '127.0.0.1', () => r()));
+process.env.TELEGRAM_API = `http://127.0.0.1:${(tgFake.address() as any).port}`;
+process.env.TELEGRAM_BOT_TOKEN = '123:test';
 const { handle } = await import('./lib/api.ts');
 
 const jar: Record<string, string> = {};
@@ -28,9 +52,25 @@ function firebaseToken(claims: object, kid = 'sinov') {
 }
 const googleToken = (uid: string, claims: object = {}, kid = 'sinov') =>
   firebaseToken({ sub: uid, name: 'Gulnora Karimova', firebase: { sign_in_provider: 'google.com' }, ...claims }, kid);
-// SMS kod bilan tasdiqlangan raqam
 const e164 = (phone: string) => { const d = phone.replace(/\D/g, ''); return '+' + (d.length === 9 ? '998' + d : d); };
-const sms = (phone: string, claims: object = {}) => firebaseToken({ sub: 'sms' + e164(phone), phone_number: e164(phone), firebase: { sign_in_provider: 'phone' }, ...claims });
+
+// Telegram bot: webhook'ga yangilanish yuborish, raqamni bog'lash va kelgan kodni olish
+const TG_SECRET = crypto.createHash('sha256').update('smena-webhook:123:test').digest('hex').slice(0, 32);
+const tg = (update: object, secret = TG_SECRET) =>
+  handle({ method: 'POST', path: '/api/telegram/webhook', cookie: '', contentType: 'application/json', body: JSON.stringify(update), https: false, tgSecret: secret });
+let chatSeq = 100;
+async function linkTg(phone: string) {
+  const id = ++chatSeq;
+  await tg({ message: { chat: { id, type: 'private' }, from: { id }, contact: { phone_number: e164(phone).slice(1), user_id: id } } });
+  return id;
+}
+const lastCode = () => /(\d{6})/.exec([...tgSent].reverse().find((m) => m.method === 'sendMessage' && /kodi/.test(m.text))?.text ?? '')?.[1] ?? '000000';
+// Ro'yxat uchun: raqamni botga bog'lab, kod so'raydi va Telegram'ga kelgan kodni qo'shadi
+async function withCode(body: any, google = false) {
+  await linkTg(body.phone);
+  const r = await call('kod', '/register/check', google ? { ...body, google: true } : body);
+  return { ...body, code: r.status === 200 ? lastCode() : '000000' };
+}
 
 // Ariza berish va smena e'lon qilish uchun profil to'liq bo'lishi kerak (ishchida rasm ham)
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200)]).toString('base64');
@@ -47,10 +87,10 @@ async function fill(who: string) {
 const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Tashkent' });
 const shift = { title: 'Ofitsiant', place: 'Chilonzor 9', date: today, start: '23:59', end: '23:59', pay: 250000, slots: 1 };
 
-assert.equal(await status('biz', '/register', { role: 'business', phone: '90 123 45 67', name: 'Aziz', org: 'Bahor to‘yxonasi', password: 'secret1', phoneToken: sms('90 123 45 67') }), 200);
-assert.equal(await status('w', '/register', { role: 'worker', phone: '+998 93 111 22 33', name: 'Dilnoza', password: 'secret1', phoneToken: sms('+998 93 111 22 33') }), 200);
-assert.equal(await status('x', '/register', { role: 'worker', phone: '931112233', name: 'Boshqa', password: 'secret1', phoneToken: sms('931112233') }), 409, 'bir raqam ikki marta');
-assert.equal(await status('x', '/register', { role: 'business', phone: '931112299', name: 'Org yo‘q', password: 'secret1', phoneToken: sms('931112299') }), 400, 'biznes nomisiz');
+assert.equal(await status('biz', '/register', await withCode({ role: 'business', phone: '90 123 45 67', name: 'Aziz', org: 'Bahor to‘yxonasi', password: 'secret1' })), 200);
+assert.equal(await status('w', '/register', await withCode({ role: 'worker', phone: '+998 93 111 22 33', name: 'Dilnoza', password: 'secret1' })), 200);
+assert.equal(await status('x', '/register', await withCode({ role: 'worker', phone: '931112233', name: 'Boshqa', password: 'secret1' })), 409, 'bir raqam ikki marta');
+assert.equal(await status('x', '/register', await withCode({ role: 'business', phone: '931112299', name: 'Org yo‘q', password: 'secret1' })), 400, 'biznes nomisiz');
 
 assert.equal(await status('w', '/shifts', shift), 403, 'ishchi smena ochmaydi');
 assert.equal((await call('biz', '/me')).data.complete, false, 'yangi hisob: profil to‘ldirilmagan');
@@ -71,7 +111,7 @@ let detail = (await call('biz', `/shifts/${shiftId}`)).data;
 const appId = detail.applicants[0].id;
 assert.equal(detail.applicants[0].phone, null, 'raqam qabulgacha yopiq');
 
-await call('biz2', '/register', { role: 'business', phone: '901112233', name: 'Begona', org: 'Begona MChJ', password: 'secret1', phoneToken: sms('901112233') });
+await call('biz2', '/register', await withCode({ role: 'business', phone: '901112233', name: 'Begona', org: 'Begona MChJ', password: 'secret1' }));
 assert.equal(await status('biz2', `/applications/${appId}`, { action: 'accept' }), 404, 'begona biznes');
 assert.equal(await status('biz2', `/shifts/${shiftId}`), 404, 'begona smena');
 
@@ -80,7 +120,7 @@ assert.equal(await status('biz', `/applications/${appId}`, { action: 'accept' })
 detail = (await call('biz', `/shifts/${shiftId}`)).data;
 assert.equal(detail.applicants[0].phone, '+998931112233', 'qabuldan keyin raqam ochiq');
 
-await call('w2', '/register', { role: 'worker', phone: '935556677', name: 'Sardor', password: 'secret1', phoneToken: sms('935556677') });
+await call('w2', '/register', await withCode({ role: 'worker', phone: '935556677', name: 'Sardor', password: 'secret1' }));
 assert.equal(await status('w2', `/shifts/${shiftId}/apply`, {}), 403, 'profilsiz ariza yo‘q');
 await fill('w2');
 assert.equal(await status('w2', `/shifts/${shiftId}/apply`, {}), 409, 'joy qolmadi');
@@ -94,7 +134,7 @@ const shift2 = (await call('biz', '/shifts', { ...shift, slots: 1 })).data.id;
 assert.equal(await status('w', `/shifts/${shift2}/apply`, {}), 403, 'bloklangan ariza bera olmaydi');
 
 // Bir joyli smenaga ikki ariza: bir vaqtda qabul qilinsa ham faqat bittasi o'tadi
-await call('w3', '/register', { role: 'worker', phone: '937778899', name: 'Jasur', password: 'secret1', phoneToken: sms('937778899') });
+await call('w3', '/register', await withCode({ role: 'worker', phone: '937778899', name: 'Jasur', password: 'secret1' }));
 await fill('w3');
 assert.equal(await status('w2', `/shifts/${shift2}/apply`, {}), 200);
 assert.equal(await status('w3', `/shifts/${shift2}/apply`, {}), 200);
@@ -156,9 +196,9 @@ assert.equal(await status('adm', '/admin/overview'), 401, 'chiqqandan keyin yopi
 const from = async (ip: string, path: string, body: object) =>
   (await handle({ method: 'POST', path: '/api' + path, cookie: '', contentType: 'application/json', body: JSON.stringify(body), https: false, ip })).status;
 const wrong = (phone: string) => ({ phone, password: 'xato12' });
-await call('l1', '/register', { role: 'worker', phone: '935550001', name: 'Limit Bir', password: 'secret1', phoneToken: sms('935550001') });
-await call('l2', '/register', { role: 'worker', phone: '935550002', name: 'Limit Ikki', password: 'secret1', phoneToken: sms('935550002') });
-await call('l3', '/register', { role: 'worker', phone: '935550003', name: 'Limit Uch', password: 'secret1', phoneToken: sms('935550003') });
+await call('l1', '/register', await withCode({ role: 'worker', phone: '935550001', name: 'Limit Bir', password: 'secret1' }));
+await call('l2', '/register', await withCode({ role: 'worker', phone: '935550002', name: 'Limit Ikki', password: 'secret1' }));
+await call('l3', '/register', await withCode({ role: 'worker', phone: '935550003', name: 'Limit Uch', password: 'secret1' }));
 
 for (let i = 0; i < 10; i++) assert.equal(await from(`10.0.0.${i}`, '/login', wrong('935550001')), 401);
 assert.equal(await from('10.0.1.1', '/login', { phone: '935550001', password: 'secret1' }), 429, 'bitta raqamga 10 ta xato: boshqa IPdan ham yopiq');
@@ -186,13 +226,13 @@ process.env.ADMIN_PASSWORD = 'test-admin-parol';
 const tok = googleToken('uid-1');
 assert.deepEqual((await call('g', '/google', { idToken: tok })).data, { signup: { name: 'Gulnora Karimova' } }, 'yangi Google hisobi: avval ro‘yxat');
 assert.equal((await call('g', '/me')).data, null, 'ro‘yxatni yakunlamasdan sessiya yo‘q');
-assert.equal(await status('g', '/google', { idToken: tok, role: 'worker', name: 'Gulnora', phone: '935550002', phoneToken: sms('935550002') }), 409, 'band raqam');
-assert.equal(await status('g', '/google', { idToken: tok, role: 'business', name: 'Gulnora', phone: '935557001', phoneToken: sms('935557001') }), 400, 'biznes nomisiz');
-const gUser = (await call('g', '/google', { idToken: tok, role: 'worker', name: 'Gulnora', phone: '935557001', phoneToken: sms('935557001') })).data;
+assert.equal(await status('g', '/google', await withCode({ idToken: tok, role: 'worker', name: 'Gulnora', phone: '935550002' }, true)), 409, 'band raqam');
+assert.equal(await status('g', '/google', await withCode({ idToken: tok, role: 'business', name: 'Gulnora', phone: '935557001' }, true)), 400, 'biznes nomisiz');
+const gUser = (await call('g', '/google', await withCode({ idToken: tok, role: 'worker', name: 'Gulnora', phone: '935557001' }, true))).data;
 assert.equal(gUser.name, 'Gulnora');
 assert.equal((await call('g', '/me')).data.first_name, 'Gulnora', 'Google ismi profilga yoziladi');
 const g2tok = googleToken('uid-3', { name: 'Aziz Karimov', picture: 'https://yomon.example/rasm.jpg' });
-const g2 = (await call('g5', '/google', { idToken: g2tok, role: 'worker', name: 'Aziz Karimov', phone: '935557002', phoneToken: sms('935557002') })).data;
+const g2 = (await call('g5', '/google', await withCode({ idToken: g2tok, role: 'worker', name: 'Aziz Karimov', phone: '935557002' }, true))).data;
 assert.deepEqual([g2.first_name, g2.last_name], ['Aziz', 'Karimov'], 'ism va familiya ajratiladi');
 assert.equal(g2.photo, null, 'Google serveridan bo‘lmagan rasm olinmaydi');
 assert.equal((await call('g', '/me')).data.id, gUser.id, 'ro‘yxatdan keyin kirgan');
@@ -213,7 +253,7 @@ for (const [bad, why] of [
 ] as const) assert.equal(await status('g4', '/google', { idToken: bad }), 401, why);
 
 // Profil
-await call('p', '/register', { role: 'worker', phone: '935558001', name: 'Profil', password: 'secret1', phoneToken: sms('935558001') });
+await call('p', '/register', await withCode({ role: 'worker', phone: '935558001', name: 'Profil', password: 'secret1' }));
 const person = { first_name: 'Malika', last_name: 'Qodirova', region: 'Samarqand viloyati', district: 'Urgut', birth_date: '1999-03-15', gender: 'f', skills: ['Kassir', 'Hakker'], about: 'Tez ishlayman' };
 assert.equal(await status('p', '/me/profile', { ...person, birth_date: `${Number(today.slice(0, 4)) - 15}-01-01` }), 400, '16 yoshdan kichik');
 assert.equal(await status('p', '/me/profile', { ...person, district: 'Moskva' }), 400, 'ro‘yxatda yo‘q tuman');
@@ -252,24 +292,49 @@ assert.equal(await status('p2', '/login', { phone: '935558001', password: 'secre
 assert.equal(await status('p2', '/login', { phone: '935558001', password: 'yangi123' }), 200);
 assert.equal(await status('g', '/me/password', { old_password: '', new_password: 'yangi123' }), 409, 'Google hisobida parol yo‘q');
 
-// SMS bilan raqamni tasdiqlash
+// Telegram kodi bilan raqamni tasdiqlash
 const newbie = { role: 'worker', phone: '935559001', name: 'Yangi', password: 'secret1' };
-assert.deepEqual((await call('s', '/register/check', newbie)).data, { phone: '+998935559001' }, 'SMS dan oldin tekshiruv');
-assert.equal(await status('s', '/register/check', { ...newbie, phone: '901234567' }), 409, 'band raqamga SMS yuborilmaydi');
-assert.equal(await status('s', '/register/check', { ...newbie, password: '1' }), 400, 'xato maydonda SMS yuborilmaydi');
-assert.equal(await status('s', '/register/check', { ...newbie, password: undefined, google: true }), 200, 'Google ro‘yxatida parol so‘ralmaydi');
-assert.equal(await status('s', '/register', newbie), 401, 'tasdiqlanmagan raqam bilan ro‘yxat yo‘q');
-assert.equal(await status('s', '/register', { ...newbie, phoneToken: sms('935559999') }), 400, 'kod boshqa raqamga');
-assert.equal(await status('s', '/register', { ...newbie, phoneToken: sms('935559001', { auth_time: Math.floor(Date.now() / 1000) - 3600 }) }), 401, 'eski kod');
-assert.equal(await status('s', '/register', { ...newbie, phoneToken: googleToken('uid-9', { phone_number: '+998935559001' }) }), 401, 'Google tokeni SMS o‘rnida emas');
-assert.equal(await status('s', '/register', { ...newbie, phoneToken: sms('935559001') }), 200);
+const notLinked = await call('s', '/register/check', newbie);
+assert.equal(notLinked.status, 428, 'raqam botga bog‘lanmagan');
+assert.match(notLinked.data.error, /t\.me\/smenauzbbot/, 'xabarda bot havolasi');
+assert.equal((await tg({ message: { chat: { id: 1, type: 'private' }, from: { id: 1 }, text: '/start' } }, 'xato')).status, 401, 'webhook maxfiy kalitsiz ishlamaydi');
+await tg({ message: { chat: { id: 900, type: 'private' }, from: { id: 900 }, text: '/start' } });
+assert.ok(tgSent.at(-1).reply_markup.keyboard[0][0].request_contact, '/start: “Raqamni yuborish” tugmasi');
+await tg({ message: { chat: { id: 901, type: 'private' }, from: { id: 901 }, contact: { phone_number: '998935559001', user_id: 777 } } });
+assert.match(tgSent.at(-1).text, /o‘zingizning raqamingizni/, 'boshqa odamning kontakti qabul qilinmaydi');
+assert.equal(await status('s', '/register/check', newbie), 428, 'begona kontakt raqamni bog‘lamadi');
+await tg({ message: { chat: { id: 902, type: 'private' }, from: { id: 902 }, contact: { phone_number: '79001234567', user_id: 902 } } });
+assert.match(tgSent.at(-1).text, /\+998/, 'faqat O‘zbekiston raqamlari');
+const newbieChat = await linkTg('935559001');
+assert.deepEqual((await call('s', '/register/check', newbie)).data, { phone: '+998935559001', bot: 'smenauzbbot' }, 'kod Telegram’ga yuborildi');
+assert.equal(tgSent.at(-1).chat_id, newbieChat, 'kod raqam bog‘langan chatga keladi');
+assert.ok(tgSent.at(-1).protect_content, 'kod xabarini uzatib bo‘lmaydi');
+const code1 = lastCode();
+assert.equal(await status('s', '/register/check', newbie), 429, 'bir daqiqa ichida qayta kod yo‘q');
+assert.equal(await status('s', '/register/check', { ...newbie, phone: '901234567' }), 409, 'band raqamga kod yuborilmaydi');
+assert.equal(await status('s', '/register/check', { ...newbie, password: '1' }), 400, 'xato maydonda kod yuborilmaydi');
+assert.equal(await status('s', '/register', newbie), 400, 'kodsiz ro‘yxat yo‘q');
+assert.equal(await status('s', '/register', { ...newbie, code: code1 === '111111' ? '222222' : '111111' }), 400, 'noto‘g‘ri kod');
+assert.equal(await status('s', '/register', { ...newbie, code: code1 }), 200, 'to‘g‘ri kod bilan ro‘yxat');
 
-assert.equal(await status('s2', '/login/check', { phone: '935559002' }), 404, 'ro‘yxatda yo‘q raqamga SMS yuborilmaydi');
-assert.deepEqual((await call('s2', '/login/check', { phone: '93 555 90 01' })).data, { phone: '+998935559001' });
-assert.equal(await status('s2', '/login/sms', { phoneToken: sms('935559002') }), 404);
-assert.equal(await status('s2', '/login/sms', { phoneToken: 'abc' }), 401);
-assert.equal((await call('s2', '/login/sms', { phoneToken: sms('935559001') })).data.name, 'Yangi', 'SMS kod bilan kirish');
+const other = { role: 'worker', phone: '935559003', name: 'Boshqa', password: 'secret1' };
+await linkTg('935559003');
+await call('s3', '/register/check', other);
+const code3 = lastCode();
+for (let i = 0; i < 5; i++) assert.equal(await status('s3', '/register', { ...other, code: code3 === '111111' ? '222222' : '111111' }), 400);
+assert.equal(await status('s3', '/register', { ...other, code: code3 }), 429, '5 ta xatodan keyin kod yaroqsiz');
+tgFail = true;
+await linkTg('935559004');
+assert.equal(await status('s4', '/register/check', { ...other, phone: '935559004' }), 502, 'bot bloklangan bo‘lsa aniq xato');
+tgFail = false;
+
+assert.equal(await status('s2', '/login/check', { phone: '935559002' }), 404, 'ro‘yxatda yo‘q raqamga kod yuborilmaydi');
+assert.deepEqual((await call('s2', '/login/check', { phone: '93 555 90 01' })).data, { phone: '+998935559001', bot: 'smenauzbbot' }, 'ishlatilgan koddan keyin darhol yangi kod');
+const loginCode = lastCode();
+assert.equal(await status('s2', '/login/code', { phone: '935559001', code: '12' }), 400);
+assert.equal((await call('s2', '/login/code', { phone: '935559001', code: loginCode })).data.name, 'Yangi', 'Telegram kodi bilan kirish');
 assert.equal((await call('s2', '/me')).data.phone, '+998935559001');
+assert.equal(await status('s5', '/login/code', { phone: '935559001', code: loginCode }), 400, 'kod bir martalik');
 
 // Farbo (AI yordamchi): kalitsiz o'chiq; keyin soxta Gemini serveri bilan to'liq yo'l
 const WAV = Buffer.concat([Buffer.from('RIFF\0\0\0\0WAVE', 'latin1'), Buffer.alloc(200)]).toString('base64');
@@ -384,6 +449,16 @@ assert.equal(await status('w2', '/ai', { text: 'salom' }), 429, 'bepulga qaytgac
 assert.equal((await call('guest', '/ai', { text: 'salom' })).data.left, null, 'mehmonga left yo‘q');
 fake.close();
 
+// Admin: Telegram bot holati va ulash
+assert.equal(await status('w', '/admin/telegram'), 401);
+assert.equal((await call('adm2', '/admin/telegram')).data.connected, false, 'bot hali ulanmagan');
+assert.equal(await status('adm2', '/admin/telegram', { action: 'connect' }), 400, 'http (lokal) manzilga ulanmaydi');
+const conn = await handle({ method: 'POST', path: '/api/admin/telegram', cookie: jar.adm2, contentType: 'application/json', body: JSON.stringify({ action: 'connect' }), https: true, origin: 'https://smena.test' });
+assert.equal(conn.status, 200);
+assert.equal((conn.data as any).connected, true);
+assert.equal(tgHook, 'https://smena.test/api/telegram/webhook');
+assert.equal(tgSent.find((m) => m.method === 'setWebhook').secret_token, TG_SECRET, 'webhook maxfiy kaliti bilan');
+
 // Demo ishlar: faqat admin qo'shadi va o'chiradi; "(demo)" belgili, ariza berib bo'lmaydi
 assert.equal(await status('w', '/admin/demo', { action: 'add' }), 401);
 assert.equal((await call('adm2', '/admin/demo', { action: 'add' })).data.added, 12);
@@ -407,11 +482,12 @@ assert.equal((await call('adm2', `/admin/users/${pId}/delete`, {})).data.applica
 assert.equal((await call('p2', '/me')).data, null, 'o‘chirilgan foydalanuvchining kirishi yopildi');
 assert.equal(await status('p3', '/login', { phone: '935558001', password: 'yangi123' }), 401);
 assert.equal((await call('biz', `/shifts/${biz3}`)).data.applicants.length, pApps - 1, 'arizasi ham o‘chdi');
-assert.equal(await status('p4', '/register', { role: 'worker', phone: '935558001', name: 'Qayta', password: 'secret1', phoneToken: sms('935558001') }), 200, 'raqam bo‘shadi');
+assert.equal(await status('p4', '/register', await withCode({ role: 'worker', phone: '935558001', name: 'Qayta', password: 'secret1' })), 200, 'raqam bo‘shadi');
 const bizId = (await call('biz', '/me')).data.id;
 const del = (await call('adm2', `/admin/users/${bizId}/delete`, {})).data;
 assert.ok(del.shifts >= 3, 'biznesning smenalari ham o‘chdi');
 assert.ok(!(await call('guest', '/shifts')).data.some((x: any) => x.org === 'Bahor to‘yxonasi'), 'smenalari ro‘yxatda yo‘q');
 assert.ok(!(await call('adm2', '/admin/overview')).data.users.some((u: any) => u.id === bizId));
 
+tgFake.close();
 console.log('Hammasi joyida ✓');

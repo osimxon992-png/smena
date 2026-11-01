@@ -2,13 +2,14 @@
 // Vercel'da bir nechta nusxa bir vaqtda ishlaydi: "tekshir-keyin-yoz" o'rniga shartli UPDATE/DELETE ishlatiladi.
 import crypto from 'node:crypto';
 import { createClient, type InStatement, type ResultSet } from '@libsql/client';
-import { MIN_AGE, ORG_TYPES, PLANS, REGIONS, SKILLS, type Plan } from './options.ts';
+import { MIN_AGE, ORG_TYPES, PLANS, REGIONS, SKILLS, TELEGRAM_BOT, type Plan } from './options.ts';
 
 type Row = Record<string, any>;
 type User = Row & { id: number; role: 'worker' | 'business'; blocked: number };
 // JSON o'rniga qaytariladigan fayl (hozircha faqat profil rasmi)
 type FileOut = { type: string; body: ArrayBuffer };
-type Ctx = { user: User | undefined; body: Row; id: number; cookieHeader: string; https: boolean; ip: string; cookie?: string; file?: FileOut };
+// tgSecret: Telegram webhook sarlavhasi (X-Telegram-Bot-Api-Secret-Token); origin: sayt manzili (webhook ulash uchun)
+type Ctx = { user: User | undefined; body: Row; id: number; cookieHeader: string; https: boolean; ip: string; tgSecret: string; origin: string; cookie?: string; file?: FileOut };
 
 // Lokalda smena.db fayli, Vercel'da TURSO_DATABASE_URL (libsql://...) va TURSO_AUTH_TOKEN
 const db = createClient({
@@ -71,6 +72,20 @@ const ready = db.executeMultiple(`
     at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS ai_calls_key ON ai_calls (key, at);
+  CREATE TABLE IF NOT EXISTS telegram_links (
+    phone TEXT PRIMARY KEY,
+    chat_id INTEGER NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS otp_codes (
+    id INTEGER PRIMARY KEY,
+    phone TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS otp_codes_phone ON otp_codes (phone, created_at);
 `).then(async () => {
   // Keyin qo'shilgan ustunlar: firebase_uid (Google orqali kirganlar) va profil.
   // SQLite'da "ADD COLUMN IF NOT EXISTS" yo'q: ustun bor bo'lsa xatoni o'tkazib yuboramiz
@@ -301,21 +316,22 @@ function userFields(body: Row, withPassword: boolean) {
 const PHONE_TAKEN = 'Bu raqam bilan ro‘yxatdan o‘tilgan. Kirish sahifasidan kiring';
 const NOT_FOUND = 'Bu raqam ro‘yxatdan o‘tmagan. Avval ro‘yxatdan o‘ting';
 
-// SMS yuborishdan oldin: maydonlar to'g'ri va raqam bo'sh ekanini tekshiradi, SMS behuda ketmasin
+// Ro'yxat 1-qadami: maydonlar to'g'ri va raqam bo'sh bo'lsa, Telegram'ga tasdiqlash kodi yuboriladi (qayta yuborish ham shu)
 async function registerCheck({ body }: Ctx) {
   const f = userFields(body, body.google !== true);
   if (await one('SELECT 1 FROM users WHERE phone = ?', f.phone)) fail(409, PHONE_TAKEN);
-  return { phone: f.phone };
+  await sendCode(f.phone);
+  return { phone: f.phone, bot: TELEGRAM_BOT };
 }
 
-// Raqam SMS kod bilan tasdiqlangan bo'lishi shart (phoneToken). firebaseUid bo'lsa (Google orqali), parol so'ralmaydi
+// Raqam Telegram'ga kelgan kod bilan tasdiqlangan bo'lishi shart (code). firebaseUid bo'lsa (Google orqali), parol so'ralmaydi
 // va Google profil rasmi (photoUrl) profilga olinadi. Ism profil uchun ism va familiyaga ajratiladi
 async function createUser(ctx: Ctx, firebaseUid: string | null = null, photoUrl = '') {
   const f = userFields(ctx.body, !firebaseUid);
   const [first, ...rest] = f.name.split(/\s+/);
   const fit = (x: string) => (x.length >= 2 && x.length <= 30 ? x : null);
   if (await one('SELECT 1 FROM users WHERE phone = ?', f.phone)) fail(409, PHONE_TAKEN);
-  if (await verifiedPhone(ctx.body.phoneToken) !== f.phone) fail(400, 'Kod boshqa raqamga yuborilgan. Raqamni tekshirib, kodni qayta oling');
+  await verifyCode(f.phone, ctx.body.code);
   try {
     // Google hisobida parol yo'q: tasodifiy parol xeshi telefon+parol bilan kirishni yopiq tutadi
     const { lastInsertRowid } = await exec(
@@ -333,7 +349,7 @@ async function createUser(ctx: Ctx, firebaseUid: string | null = null, photoUrl 
 
 const register = (ctx: Ctx) => createUser(ctx);
 
-// --- Firebase Auth: Google orqali kirish va SMS kod bilan telefonni tasdiqlash ---
+// --- Firebase Auth: Google orqali kirish ---
 // Brauzer Firebase'dan ID token oladi; server uni Google'ning ochiq kalitlari bilan o'zi tekshiradi (firebase-admin kerak emas).
 // https://firebase.google.com/docs/auth/admin/verify-id-tokens#verify_id_tokens_using_a_third-party_jwt_library
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT_ID || 'smena-855fd';
@@ -355,9 +371,9 @@ async function googleKey(kid: string) {
 
 const jwtPart = (s: string) => { try { return JSON.parse(Buffer.from(s, 'base64url').toString()) as Row; } catch { return null; } };
 
-// Imzosi, loyihasi, muddati va kirish usuli (google.com yoki phone) to'g'ri bo'lsa, token ma'lumotlarini qaytaradi
-async function firebaseClaims(idToken: unknown, provider: 'google.com' | 'phone') {
-  const bad = (): never => fail(401, provider === 'phone' ? 'Raqam tasdiqlanmadi. Kodni qayta oling' : 'Google orqali kirish tasdiqlanmadi. Qayta urinib ko‘ring');
+// Imzosi, loyihasi, muddati va kirish usuli (google.com) to'g'ri bo'lsa, token ma'lumotlarini qaytaradi
+async function firebaseClaims(idToken: unknown, provider: 'google.com') {
+  const bad = (): never => fail(401, 'Google orqali kirish tasdiqlanmadi. Qayta urinib ko‘ring');
   const [h, p, s, extra] = typeof idToken === 'string' ? idToken.split('.') : [];
   const header = h ? jwtPart(h) : null, claims = p ? jwtPart(p) : null;
   if (!s || extra !== undefined || header?.alg !== 'RS256' || typeof header.kid !== 'string' || !claims) return bad();
@@ -398,14 +414,8 @@ async function importGooglePhoto(userId: number, url: string) {
   );
 }
 
-// SMS kod bilan tasdiqlangan raqam (+998...). Kod so'nggi 10 daqiqada kiritilgan bo'lishi kerak: eski token qayta ishlatilmaydi
-async function verifiedPhone(idToken: unknown) {
-  const claims = await firebaseClaims(idToken, 'phone');
-  if (!(Date.now() / 1000 - claims.auth_time < 600) || typeof claims.phone_number !== 'string') fail(401, 'Kod muddati o‘tdi. Kodni qayta oling');
-  return claims.phone_number as string;
-}
 
-// Hisob bo'lsa kiradi. Birinchi marta bo'lsa {signup} qaytadi: brauzer rol, ism va telefonni so'rab (telefon SMS bilan tasdiqlanadi),
+// Hisob bo'lsa kiradi. Birinchi marta bo'lsa {signup} qaytadi: brauzer rol, ism va telefonni so'rab (telefon Telegram kodi bilan tasdiqlanadi),
 // shu token bilan qayta yuboradi (telefon kerak: smenaga qabul qilingach biznes ishchiga shu raqam orqali bog'lanadi)
 async function google(ctx: Ctx) {
   const g = await googleUser(ctx.body.idToken);
@@ -415,16 +425,109 @@ async function google(ctx: Ctx) {
   return createUser(ctx, g.uid, g.picture);
 }
 
-// SMS bilan kirish: avval raqam ro'yxatda borligini tekshiramiz (SMS behuda ketmasin), keyin tasdiqlangan raqam bilan kiramiz
+// Kod bilan kirish: raqam ro'yxatda bo'lsa, Telegram'ga kod yuboriladi; keyin { phone, code } bilan kiriladi
 async function loginCheck({ body }: Ctx) {
   const p = phone(body.phone);
   if (!(await one('SELECT 1 FROM users WHERE phone = ?', p))) fail(404, NOT_FOUND);
-  return { phone: p };
+  await sendCode(p);
+  return { phone: p, bot: TELEGRAM_BOT };
 }
 
-async function smsLogin(ctx: Ctx) {
-  const u = await one('SELECT id FROM users WHERE phone = ?', await verifiedPhone(ctx.body.phoneToken)) || fail(404, NOT_FOUND);
+async function codeLogin(ctx: Ctx) {
+  const p = phone(ctx.body.phone);
+  const u = await one('SELECT id FROM users WHERE phone = ?', p) || fail(404, NOT_FOUND);
+  await verifyCode(p, ctx.body.code);
   return startSession(ctx, u.id);
+}
+
+// --- Telegram bot: tasdiqlash kodlari ---
+// Foydalanuvchi @bot da /start bosib, "Raqamni yuborish" bilan Telegram tasdiqlagan raqamini yuboradi: raqam ↔ chat bog'lanadi.
+// Keyin saytda kod so'raganda kod shu chatga keladi. Token faqat serverda: TELEGRAM_BOT_TOKEN.
+// test.ts TELEGRAM_API bilan soxta serverga yo'naltiradi
+const tgToken = () => process.env.TELEGRAM_BOT_TOKEN ?? '';
+// Webhook'ning maxfiy sarlavhasi tokendan olinadi: alohida sozlama shart emas, token almashsa u ham almashadi
+const tgSecret = () => (tgToken() ? crypto.createHash('sha256').update(`smena-webhook:${tgToken()}`).digest('hex').slice(0, 32) : '');
+const CODE_TTL = "datetime('now', '-5 minutes')";
+const NOT_LINKED = `Kod Telegram orqali keladi. Avval t.me/${TELEGRAM_BOT} botini oching, /start bosing va “📱 Raqamni yuborish” tugmasini bosing. Keyin shu yerda qayta urinib ko‘ring`;
+
+async function telegram(method: string, body: Row) {
+  if (!tgToken()) fail(503, 'Telegram bot hali sozlanmagan: serverda TELEGRAM_BOT_TOKEN yo‘q');
+  const res = await fetch(`${process.env.TELEGRAM_API || 'https://api.telegram.org'}/bot${tgToken()}/${method}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000),
+  }).catch(() => null);
+  const data = res ? await res.json().catch(() => null) : null;
+  return (data ?? { ok: false, description: 'Telegram bilan bog‘lanib bo‘lmadi' }) as Row;
+}
+
+// Kod bazada ochiq holda emas, bot tokeni bilan imzolangan xesh ko'rinishida saqlanadi
+const codeHash = (p: string, code: string) => crypto.createHmac('sha256', tgToken()).update(`${p}:${code}`).digest('hex');
+
+// Bir raqamga: ishlatilmagan kod bo'lsa, qayta yuborish 1 daqiqadan keyin; soatiga ko'pi bilan 5 ta kod
+async function sendCode(p: string) {
+  const link = await one('SELECT chat_id FROM telegram_links WHERE phone = ?', p) || fail(428, NOT_LINKED);
+  const recent = await one(
+    `SELECT COUNT(*) FILTER (WHERE used = 0 AND created_at > datetime('now', '-60 seconds')) fresh, COUNT(*) n
+     FROM otp_codes WHERE phone = ? AND created_at > datetime('now', '-1 hour')`, p);
+  if (Number(recent?.fresh)) fail(429, 'Kod hozirgina yuborildi. Telegram’ni tekshiring yoki bir daqiqadan keyin qayta so‘rang');
+  if (Number(recent?.n) >= 5) fail(429, 'Bu raqamga juda ko‘p kod so‘raldi. Bir soatdan keyin urinib ko‘ring');
+  const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+  const sent = await telegram('sendMessage', {
+    chat_id: link.chat_id,
+    text: `🔐 Smena tasdiqlash kodi: ${code}\n\nKodni hech kimga bermang — Smena xodimlari ham uni so‘ramaydi. Kod 5 daqiqa amal qiladi.`,
+    protect_content: true,
+  });
+  if (!sent.ok) fail(502, `Telegram’ga kod yuborib bo‘lmadi. t.me/${TELEGRAM_BOT} botini bloklamaganingizni tekshiring va /start bosing`);
+  await exec('INSERT INTO otp_codes (phone, code_hash) VALUES (?, ?)', p, codeHash(p, code));
+}
+
+// Oxirgi kod: 5 daqiqa ichida, ko'pi bilan 5 ta noto'g'ri urinish, bir martalik
+async function verifyCode(p: string, code: unknown) {
+  const given = String(code ?? '').replace(/\D/g, '');
+  if (given.length !== 6) fail(400, 'Telegram’ga kelgan 6 xonali kodni kiriting');
+  const row = await one(`SELECT id, code_hash, attempts FROM otp_codes WHERE phone = ? AND used = 0 AND created_at > ${CODE_TTL} ORDER BY id DESC LIMIT 1`, p)
+    || fail(400, 'Kod muddati o‘tgan yoki so‘ralmagan. Yangi kod oling');
+  if (row.attempts >= 5) fail(429, 'Juda ko‘p noto‘g‘ri urinish. Yangi kod oling');
+  if (!sameSecret(codeHash(p, given), row.code_hash)) {
+    await exec('UPDATE otp_codes SET attempts = attempts + 1 WHERE id = ?', row.id);
+    fail(400, 'Kod noto‘g‘ri');
+  }
+  const { rowsAffected } = await exec('UPDATE otp_codes SET used = 1 WHERE id = ? AND used = 0', row.id);
+  if (!rowsAffected) fail(400, 'Bu kod ishlatilgan. Yangi kod oling');
+}
+
+const CONTACT_KEYBOARD = { keyboard: [[{ text: '📱 Raqamni yuborish', request_contact: true }]], resize_keyboard: true, one_time_keyboard: true };
+
+// Telegram yuboradigan yangilanishlar: /start, kontakt (raqam) va boshqa xabarlar
+async function telegramWebhook(ctx: Ctx) {
+  if (!tgSecret() || !sameSecret(ctx.tgSecret, tgSecret())) fail(401, 'Ruxsat yo‘q');
+  const msg = ctx.body.message;
+  const chat = msg?.chat?.id;
+  if (!chat || msg.chat.type !== 'private') return { ok: true };
+  const reply = (text: string, extra: Row = {}) => telegram('sendMessage', { chat_id: chat, text, ...extra });
+  if (msg.contact) {
+    // Faqat o'z raqami: boshqa odamning kontaktini yuborib, uning hisobiga kod olib bo'lmasin
+    if (msg.contact.user_id !== msg.from?.id) {
+      await reply('Faqat o‘zingizning raqamingizni yuboring: pastdagi “📱 Raqamni yuborish” tugmasini bosing.', { reply_markup: CONTACT_KEYBOARD });
+      return { ok: true };
+    }
+    const digits = String(msg.contact.phone_number ?? '').replace(/\D/g, '');
+    if (!/^998\d{9}$/.test(digits)) {
+      await reply('Smena hozircha faqat O‘zbekiston (+998) raqamlari bilan ishlaydi.', { reply_markup: { remove_keyboard: true } });
+      return { ok: true };
+    }
+    await exec(
+      `INSERT INTO telegram_links (phone, chat_id) VALUES (?, ?)
+       ON CONFLICT (phone) DO UPDATE SET chat_id = excluded.chat_id, updated_at = datetime('now')`,
+      `+${digits}`, chat,
+    );
+    await reply(`✅ Raqamingiz bog‘landi: +${digits}\n\nEndi saytga qaytib, kod so‘rang — u shu chatga keladi.`, { reply_markup: { remove_keyboard: true } });
+    return { ok: true };
+  }
+  await reply(
+    'Assalomu alaykum! Men Smena botiman 👋\n\nSmena’da ro‘yxatdan o‘tish va kirish uchun tasdiqlash kodlarini shu yerga yuboraman.\n\nBoshlash uchun pastdagi “📱 Raqamni yuborish” tugmasini bosing.',
+    { reply_markup: CONTACT_KEYBOARD },
+  );
+  return { ok: true };
 }
 
 // Parol tanlashni cheklash: 15 daqiqada noto'g'ri urinishlar soni [kalit, ruxsat] dan oshsa, 429.
@@ -1047,9 +1150,32 @@ async function adminDeleteUser(ctx: Ctx) {
     { sql: 'DELETE FROM photos WHERE user_id = ?', args: [u.id] },
     { sql: 'DELETE FROM ai_calls WHERE key IN (?, ?)', args: [`ai:u${u.id}`, `tts:u${u.id}`] },
     { sql: 'DELETE FROM login_fails WHERE key = ?', args: [`phone:${u.phone}`] },
+    { sql: 'DELETE FROM otp_codes WHERE phone = ?', args: [u.phone] },
     { sql: 'DELETE FROM users WHERE id = ?', args: [u.id] },
   ], 'write');
   return { deleted: true, applications: apps.rowsAffected, shifts: shifts.rowsAffected };
+}
+
+// Telegram bot holati (GET) va ulash (POST): webhook shu saytning /api/telegram/webhook manziliga o'rnatiladi
+async function adminTelegram(ctx: Ctx) {
+  needAdmin(ctx);
+  if (!tgToken()) return { configured: false };
+  if (ctx.body.action === 'connect') {
+    if (!ctx.origin.startsWith('https://')) fail(400, 'Botni faqat https manzildagi (jonli) saytdan ulash mumkin');
+    const set = await telegram('setWebhook', { url: `${ctx.origin}/api/telegram/webhook`, secret_token: tgSecret(), allowed_updates: ['message'], drop_pending_updates: true });
+    if (!set.ok) fail(502, `Telegram webhook o‘rnatilmadi: ${set.description ?? ''}`);
+    await telegram('setMyCommands', { commands: [{ command: 'start', description: 'Raqamni bog‘lash va kod olish' }] });
+  }
+  const [me, hook] = await Promise.all([telegram('getMe', {}), telegram('getWebhookInfo', {})]);
+  const linked = await one('SELECT COUNT(*) n FROM telegram_links');
+  return {
+    configured: true,
+    bot: me.result?.username ?? null,
+    webhook: hook.result?.url ?? '',
+    connected: hook.result?.url === `${ctx.origin}/api/telegram/webhook`,
+    last_error: hook.result?.last_error_message ?? null,
+    linked: Number(linked?.n ?? 0),
+  };
 }
 
 // Obunani o'zgartirish: { plan: 'free' } yoki { plan: 'pro', months: 1 | 3 | 6 | 12 | 0 (muddatsiz) }.
@@ -1152,11 +1278,14 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['GET', /^\/api\/admin\/overview$/, adminOverview],
   ['POST', /^\/api\/admin\/ai$/, askFarboAdmin],
   ['POST', /^\/api\/admin\/demo$/, adminDemo],
+  ['GET', /^\/api\/admin\/telegram$/, adminTelegram],
+  ['POST', /^\/api\/admin\/telegram$/, adminTelegram],
   ['POST', /^\/api\/admin\/users\/(\d+)$/, adminSetBlocked],
   ['POST', /^\/api\/register\/check$/, registerCheck],
   ['POST', /^\/api\/register$/, register],
   ['POST', /^\/api\/login\/check$/, loginCheck],
-  ['POST', /^\/api\/login\/sms$/, smsLogin],
+  ['POST', /^\/api\/login\/code$/, codeLogin],
+  ['POST', /^\/api\/telegram\/webhook$/, telegramWebhook],
   ['POST', /^\/api\/login$/, login],
   ['POST', /^\/api\/google$/, google],
   ['POST', /^\/api\/logout$/, logout],
@@ -1178,11 +1307,11 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['POST', /^\/api\/applications\/(\d+)\/cancel$/, cancel],
 ];
 
-export type ApiRequest = { method: string; path: string; cookie: string | null; contentType: string | null; body: string; https: boolean; ip?: string };
+export type ApiRequest = { method: string; path: string; cookie: string | null; contentType: string | null; body: string; https: boolean; ip?: string; tgSecret?: string | null; origin?: string };
 export type ApiResponse = { status: number; data: unknown; cookie?: string; file?: FileOut };
 
 export async function handle(req: ApiRequest): Promise<ApiResponse> {
-  const ctx: Ctx = { user: undefined, body: {}, id: 0, cookieHeader: req.cookie ?? '', https: req.https, ip: req.ip || 'unknown' };
+  const ctx: Ctx = { user: undefined, body: {}, id: 0, cookieHeader: req.cookie ?? '', https: req.https, ip: req.ip || 'unknown', tgSecret: req.tgSecret ?? '', origin: req.origin ?? '' };
   try {
     await ready;
     ctx.user = await currentUser(ctx.cookieHeader);

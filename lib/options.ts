@@ -83,3 +83,6 @@ export type Plan = keyof typeof PLANS;
 export const planName = (plan: Plan, role: 'worker' | 'business') => (plan === 'pro' ? (role === 'worker' ? 'Ishchi Pro' : 'Biznes Pro') : PLANS.free.name);
 // Obuna olish uchun murojaat
 export const PLAN_CONTACT = { label: 'Telegram: @osimxon_00', href: 'https://t.me/osimxon_00' };
+
+// Tasdiqlash kodlari keladigan Telegram bot (t.me/...)
+export const TELEGRAM_BOT = 'smenauzbbot';
