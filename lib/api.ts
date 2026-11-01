@@ -444,7 +444,8 @@ async function codeLogin(ctx: Ctx) {
 // Foydalanuvchi @bot da /start bosib, "Raqamni yuborish" bilan Telegram tasdiqlagan raqamini yuboradi: raqam ↔ chat bog'lanadi.
 // Keyin saytda kod so'raganda kod shu chatga keladi. Token faqat serverda: TELEGRAM_BOT_TOKEN.
 // test.ts TELEGRAM_API bilan soxta serverga yo'naltiradi
-const tgToken = () => process.env.TELEGRAM_BOT_TOKEN ?? '';
+// Vercel'ga nusxa olishda qo'shilib qoladigan bo'shliq, qator oxiri va qo'shtirnoq tozalanadi (cleanSecret)
+const tgToken = () => cleanSecret(process.env.TELEGRAM_BOT_TOKEN ?? '');
 // Webhook'ning maxfiy sarlavhasi tokendan olinadi: alohida sozlama shart emas, token almashsa u ham almashadi
 const tgSecret = () => (tgToken() ? crypto.createHash('sha256').update(`smena-webhook:${tgToken()}`).digest('hex').slice(0, 32) : '');
 const CODE_TTL = "datetime('now', '-5 minutes')";
@@ -499,7 +500,9 @@ const CONTACT_KEYBOARD = { keyboard: [[{ text: '📱 Raqamni yuborish', request_
 
 // Telegram yuboradigan yangilanishlar: /start, kontakt (raqam) va boshqa xabarlar
 async function telegramWebhook(ctx: Ctx) {
-  if (!tgSecret() || !sameSecret(ctx.tgSecret, tgSecret())) fail(401, 'Ruxsat yo‘q');
+  // Token yo'qligi alohida xato: bot ulanmay qolsa, sababini darhol ko'rish mumkin
+  if (!tgSecret()) fail(503, 'Serverda TELEGRAM_BOT_TOKEN o‘rnatilmagan');
+  if (!sameSecret(ctx.tgSecret, tgSecret())) fail(401, 'Ruxsat yo‘q');
   const msg = ctx.body.message;
   const chat = msg?.chat?.id;
   if (!chat || msg.chat.type !== 'private') return { ok: true };
