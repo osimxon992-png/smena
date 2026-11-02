@@ -5,36 +5,41 @@ import NextSign from '@/components/site/NextSign';
 import PageHead from '@/components/site/PageHead';
 import QuickPost from '@/components/site/QuickPost';
 import Wipe from '@/components/site/Wipe';
+import { getT } from '@/lib/lang-server';
 
-export const metadata: Metadata = {
-  title: 'Bizneslar uchun',
-  description: 'Bir kunlik smena e’lon qiling: biznes uchun bepul. Kimni olishni o‘zingiz tanlaysiz.',
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const { t } = await getT();
+  return {
+    title: t('Bizneslar uchun'),
+    description: t('Bir kunlik smena e’lon qiling: biznes uchun bepul. Kimni olishni o‘zingiz tanlaysiz.'),
+  };
+}
 
-export default function Business() {
+export default async function Business() {
+  const { t } = await getT();
   return (
     <>
-      <PageHead title="Bizneslar uchun" lead="To‘yxona, restoran, ombor yoki topshirish punkti: bir kunga qo‘shimcha odam kerak bo‘lsa, shu yerda e’lon qiling.">
+      <PageHead title={t('Bizneslar uchun')} lead={t('To‘yxona, restoran, ombor yoki topshirish punkti: bir kunga qo‘shimcha odam kerak bo‘lsa, shu yerda e’lon qiling.')}>
         <QuickPost />
       </PageHead>
 
       <section className="section wrap" id="hisob" aria-labelledby="biz-title">
         <div className="biz-grid">
           <div>
-            <Wipe id="biz-title">Ertaga ishchi kerakmi?</Wipe>
-            <p className="lead">Smenani bir daqiqada e’lon qiling. Reytingi va bajargan smenalari ko‘rinib turgan ishchilar ariza beradi, kimni olishni o‘zingiz tanlaysiz.</p>
+            <Wipe id="biz-title">{t('Ertaga ishchi kerakmi?')}</Wipe>
+            <p className="lead">{t('Smenani bir daqiqada e’lon qiling. Reytingi, kelish foizi va bajargan smenalari ko‘rinib turgan ishchilar ariza beradi, kimni olishni o‘zingiz tanlaysiz.')}</p>
             <ol className="biz-steps">
-              <li>Lavozim, sana, vaqt va haqni yozasiz.</li>
-              <li>Arizalarni ko‘rib, kerakli odamlarni qabul qilasiz.</li>
-              <li>Smena kuni kelganlarni belgilaysiz va baholaysiz. E’lon va tanlov bepul.</li>
+              <li>{t('Lavozim, sana, vaqt va haqni yozasiz. Har kuni yoki har hafta takrorlanadigan smenani bir martada e’lon qilasiz.')}</li>
+              <li>{t('Arizalarni ko‘rib, kerakli odamlarni qabul qilasiz. Yaxshi ishlaganlarni sevimlilarga qo‘shasiz: keyingi smenada ularga birinchi bo‘lib xabar boradi.')}</li>
+              <li>{t('Ishchilar Telegram’da eslatma oladi va kelishini tasdiqlaydi, joyiga kelganda “Keldim” bosadi. Siz kelganlarni belgilab baholaysiz. E’lon va tanlov bepul.')}</li>
             </ol>
-            <Link className="btn btn-lg" href="/ilova/royxat?rol=biznes">Smena e’lon qilish</Link>
+            <Link className="btn btn-lg" href="/ilova/royxat?rol=biznes">{t('Smena e’lon qilish')}</Link>
           </div>
           <Calculator />
         </div>
       </section>
 
-      <NextSign href="/savollar" title="Savollar" tone="paper" />
+      <NextSign href="/savollar" title={t('Savollar')} tone="paper" />
     </>
   );
 }

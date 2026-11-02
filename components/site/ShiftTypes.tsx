@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { smoothScrollTo } from '@/components/SmoothScroll';
 import Wipe from './Wipe';
+import { useT } from '@/components/Lang';
 
 const TYPES = [
   ['To‘yxonalar', 'Ofitsiant, idish yuvuvchi, stol yig‘uvchi', 'Ko‘pincha kechqurun va dam olish kunlari.', 'paper'],
@@ -19,6 +20,7 @@ export default function ShiftTypes() {
   const section = useRef<HTMLElement>(null);
   const track = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
+  const { t } = useT();
 
   useEffect(() => {
     const rows = section.current!, strip = track.current!;
@@ -80,22 +82,22 @@ export default function ShiftTypes() {
       <div className="rows-pin">
         <div className="wrap rows-head">
           <div>
-            <Wipe id="rows-title">Qanday smenalar bo‘ladi</Wipe>
-            <p className="lead">Bir kunga qo‘shimcha odam kerak bo‘ladigan har qanday joy. Eng ko‘p uchraydiganlari:</p>
+            <Wipe id="rows-title">{t('Qanday smenalar bo‘ladi')}</Wipe>
+            <p className="lead">{t('Bir kunga qo‘shimcha odam kerak bo‘ladigan har qanday joy. Eng ko‘p uchraydiganlari:')}</p>
           </div>
-          <nav className="rows-index" aria-label="Smena turlari">
+          <nav className="rows-index" aria-label={t('Smena turlari')}>
             <span className="rows-count" aria-hidden="true">{active + 1}/{TYPES.length}</span>
             {TYPES.map(([title], i) => (
-              <button key={title} type="button" className="pick" aria-pressed={i === active} onClick={() => go(i)}>{title}</button>
+              <button key={title} type="button" className="pick" aria-pressed={i === active} onClick={() => go(i)}>{t(title)}</button>
             ))}
           </nav>
         </div>
         <div ref={track} className="rows-track">
           {TYPES.map(([title, roles, when, tone]) => (
             <article key={title} className={`stall-sign stall-${tone}`}>
-              <h3>{title}</h3>
-              <p className="roles-line">{roles}</p>
-              <p className="when-line">{when}</p>
+              <h3>{t(title)}</h3>
+              <p className="roles-line">{t(roles)}</p>
+              <p className="when-line">{t(when)}</p>
             </article>
           ))}
         </div>

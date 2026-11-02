@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { useT } from '@/components/Lang';
 
 const FLOWS = {
   worker: {
@@ -22,18 +23,19 @@ const FLOWS = {
 export default function RoleSwitch() {
   const [role, setRole] = useState<keyof typeof FLOWS>('worker');
   const flow = FLOWS[role];
+  const { t } = useT();
   return (
     <div className="widget sheet taped">
-      <h2 className="widget-title">Siz kimsiz?</h2>
-      <div className="pick-row" role="group" aria-label="Kimligingizni tanlang">
+      <h2 className="widget-title">{t('Siz kimsiz?')}</h2>
+      <div className="pick-row" role="group" aria-label={t('Kimligingizni tanlang')}>
         {(Object.keys(FLOWS) as (keyof typeof FLOWS)[]).map((k) => (
-          <button key={k} type="button" className="pick" aria-pressed={k === role} onClick={() => setRole(k)}>{FLOWS[k].label}</button>
+          <button key={k} type="button" className="pick" aria-pressed={k === role} onClick={() => setRole(k)}>{t(FLOWS[k].label)}</button>
         ))}
       </div>
       <ol className="widget-steps" key={role} aria-live="polite">
-        {flow.steps.map((s) => <li key={s}>{s}</li>)}
+        {flow.steps.map((s) => <li key={s}>{t(s)}</li>)}
       </ol>
-      <Link className="btn" href={flow.href}>{flow.cta}</Link>
+      <Link className="btn" href={flow.href}>{t(flow.cta)}</Link>
     </div>
   );
 }

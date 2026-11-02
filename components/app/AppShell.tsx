@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import InstallButton from '@/components/InstallButton';
 import Farbo from '@/components/Farbo';
+import { LangSwitch, useT } from '@/components/Lang';
 import { api, type Me } from '@/lib/client';
 import Avatar from './Avatar';
 
@@ -51,6 +52,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const path = usePathname();
   const router = useRouter();
+  const { t } = useT();
 
   const refreshMe = useCallback(() => api<Me | null>('/me').then(setMe).catch(() => {}), []);
   useEffect(() => { refreshMe().finally(() => setReady(true)); }, [path, refreshMe]);
@@ -71,7 +73,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const links = !me ? [['/ilova/smenalar', 'Smenalar'], ['/ilova/kirish', 'Kirish']]
     : me.role === 'worker' ? [['/ilova/smenalar', 'Smenalar'], ['/ilova/arizalarim', 'Arizalarim']]
-    : [['/ilova/biznes', 'Smenalarim'], ['/ilova/yangi', 'Yangi smena']];
+    : [['/ilova/biznes', 'Smenalarim'], ['/ilova/yangi', 'Yangi smena'], ['/ilova/sevimlilar', 'Sevimlilar']];
 
   return (
     <AppContext.Provider value={{ me, ready, setMe, refreshMe, toast }}>
@@ -79,17 +81,18 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <div className="wrap">
           <header className="top">
             <Link className="logo" href="/">Smena</Link>
-            <nav aria-label="Ilova">
+            <nav aria-label={t('Ilova')}>
               {links.map(([href, text]) => (
-                <Link key={href} href={href} aria-current={path.startsWith(href) ? 'page' : undefined}>{text}</Link>
+                <Link key={href} href={href} aria-current={path.startsWith(href) ? 'page' : undefined}>{t(text)}</Link>
               ))}
               {me && (
                 <Link className="nav-me" href="/ilova/profil" aria-current={path === '/ilova/profil' ? 'page' : undefined}>
-                  <Avatar photo={me.photo} name={me.name} />Profil
+                  <Avatar photo={me.photo} name={me.name} />{t('Profil')}
                 </Link>
               )}
               <InstallButton className="link" />
-              {me && <button type="button" className="link" onClick={logout}>Chiqish</button>}
+              {me && <button type="button" className="link" onClick={logout}>{t('Chiqish')}</button>}
+              <LangSwitch />
             </nav>
           </header>
           <main id="asosiy">{children}</main>

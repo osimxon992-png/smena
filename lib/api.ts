@@ -2,14 +2,21 @@
 // Vercel'da bir nechta nusxa bir vaqtda ishlaydi: "tekshir-keyin-yoz" o'rniga shartli UPDATE/DELETE ishlatiladi.
 import crypto from 'node:crypto';
 import { createClient, type InStatement, type ResultSet } from '@libsql/client';
-import { MIN_AGE, ORG_TYPES, PLANS, REGIONS, SKILLS, TELEGRAM_BOT, type Plan } from './options.ts';
+import { dayName, fill, isLang, langFromCookie, money, tashkentDate, type Lang, type Vars } from './i18n.ts';
+import { T, tgLang } from './messages.ts';
+import { MIN_AGE, ORG_TYPES, PLAN_CONTACT, PLANS, REGIONS, SKILLS, TELEGRAM_BOT, type Plan } from './options.ts';
 
 type Row = Record<string, any>;
 type User = Row & { id: number; role: 'worker' | 'business'; blocked: number };
 // JSON o'rniga qaytariladigan fayl (hozircha faqat profil rasmi)
 type FileOut = { type: string; body: ArrayBuffer };
 // tgSecret: Telegram webhook sarlavhasi (X-Telegram-Bot-Api-Secret-Token); origin: sayt manzili (webhook ulash uchun)
-type Ctx = { user: User | undefined; body: Row; id: number; cookieHeader: string; https: boolean; ip: string; tgSecret: string; origin: string; cookie?: string; file?: FileOut };
+// lang: so'rovchining tili (xatolar va kodlar shu tilda); query: manzildagi ?... (smenalar filtri);
+// tasks: javobdan keyin bajariladigan ishlar (Telegram bildirishnomalari)
+type Ctx = {
+  user: User | undefined; body: Row; id: number; cookieHeader: string; https: boolean; ip: string; tgSecret: string; origin: string;
+  lang: Lang; query: URLSearchParams; tasks: Promise<unknown>[]; cookie?: string; file?: FileOut;
+};
 
 // Lokalda smena.db fayli, Vercel'da TURSO_DATABASE_URL (libsql://...) va TURSO_AUTH_TOKEN
 const db = createClient({
@@ -86,16 +93,36 @@ const ready = db.executeMultiple(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS otp_codes_phone ON otp_codes (phone, created_at);
+  -- Biznesning sevimli ishchilari: yangi smena e'lon qilsa, ularga birinchi bo'lib xabar boradi
+  CREATE TABLE IF NOT EXISTS favorites (
+    business_id INTEGER NOT NULL REFERENCES users(id),
+    worker_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (business_id, worker_id)
+  );
+  -- Sevimli ishchini aniq smenaga taklif qilish (bir smenaga bir marta)
+  CREATE TABLE IF NOT EXISTS invites (
+    shift_id INTEGER NOT NULL REFERENCES shifts(id),
+    worker_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (shift_id, worker_id)
+  );
+  -- Fon ishlarining oxirgi bajarilgan vaqti (eslatmalar)
+  CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '');
 `).then(async () => {
   // Keyin qo'shilgan ustunlar: firebase_uid (Google orqali kirganlar) va profil.
   // SQLite'da "ADD COLUMN IF NOT EXISTS" yo'q: ustun bor bo'lsa xatoni o'tkazib yuboramiz
-  for (const col of ['firebase_uid', 'first_name', 'last_name', 'birth_date', 'gender', 'region', 'district', 'about', 'skills', 'org_type', 'address', 'plan', 'plan_until']) {
+  for (const col of ['firebase_uid', 'first_name', 'last_name', 'birth_date', 'gender', 'region', 'district', 'about', 'skills', 'org_type', 'address', 'plan', 'plan_until', 'lang']) {
     await exec(`ALTER TABLE users ADD COLUMN ${col} TEXT`).catch((e) => { if (!/duplicate column/i.test(String(e?.message))) throw e; });
   }
   await exec('CREATE UNIQUE INDEX IF NOT EXISTS users_firebase_uid ON users (firebase_uid)');
   // Admin qo'shadigan namuna (demo) bizneslar va smenalar belgisi
   for (const table of ['users', 'shifts']) {
     await exec(`ALTER TABLE ${table} ADD COLUMN demo INTEGER NOT NULL DEFAULT 0`).catch((e) => { if (!/duplicate column/i.test(String(e?.message))) throw e; });
+  }
+  // Arizalar: nechanchi eslatma yuborilgani (0, 1 — kun oldin, 2 — 3 soat oldin), ishchining javobi (yes/no) va "Keldim" vaqti
+  for (const col of ['reminded INTEGER NOT NULL DEFAULT 0', 'confirm TEXT', 'checkin_at TEXT']) {
+    await exec(`ALTER TABLE applications ADD COLUMN ${col}`).catch((e) => { if (!/duplicate column/i.test(String(e?.message))) throw e; });
   }
 });
 
@@ -106,12 +133,18 @@ const one = async (sql: string, ...args: any[]) => plain(await exec(sql, ...args
 const all = async (sql: string, ...args: any[]) => plain(await exec(sql, ...args));
 const isUnique = (e: unknown) => /UNIQUE constraint failed/i.test(String((e as Error)?.message));
 
+// Xato matni — lug'at kaliti (lib/messages.ts): javobda so'rovchining tiliga o'giriladi, {nom} o'rniga vars qo'yiladi
 class HttpError extends Error {
   status: number;
-  constructor(status: number, message: string) { super(message); this.status = status; }
+  key: string;
+  vars?: Vars;
+  constructor(status: number, key: string, vars?: Vars) { super(fill(key, vars)); this.status = status; this.key = key; this.vars = vars; }
 }
 // function e'loni (const emas): TypeScript faqat shunda chaqiruvdan keyingi kodni yetib bo'lmaydi deb biladi
-function fail(status: number, message: string): never { throw new HttpError(status, message); }
+function fail(status: number, message: string, vars?: Vars): never { throw new HttpError(status, message, vars); }
+// Matnli o'zgaruvchilar ham o'giriladi (maydon nomlari: "Ism", "Haq")
+const errorText = (lang: Lang, e: HttpError) =>
+  T(lang, e.key, e.vars && Object.fromEntries(Object.entries(e.vars).map(([k, v]) => [k, typeof v === 'string' ? T(lang, v) : v])));
 
 // Smenalar Toshkent vaqtida; server istalgan vaqt zonasida ishlashi mumkin
 function now() {
@@ -127,18 +160,20 @@ const OPEN = '(s.date > ? OR (s.date = ? AND s.start_time > ?))';
 const openArgs = () => { const { date, time } = now(); return [date, date, time]; };
 const TAKEN = "(SELECT COUNT(*) FROM applications x WHERE x.shift_id = s.id AND x.status IN ('accepted', 'came', 'noshow'))";
 const ORG_RATING = '(SELECT ROUND(AVG(x.business_rating), 1) FROM applications x JOIN shifts y ON y.id = x.shift_id WHERE y.business_id = s.business_id)';
+// Biznesga ishonch: uning smenalarida necha marta ish bajarilgan
+const ORG_DONE = "(SELECT COUNT(*) FROM applications x JOIN shifts y ON y.id = x.shift_id WHERE y.business_id = s.business_id AND x.status = 'came')";
 
 // --- Tekshiruvlar (trust boundary) ---
 
 function str(v: unknown, min: number, max: number, label: string) {
   const s = typeof v === 'string' ? v.trim() : '';
-  if (s.length < min || s.length > max) fail(400, `${label}: ${min}–${max} belgi bo‘lishi kerak`);
+  if (s.length < min || s.length > max) fail(400, '{label}: {min}–{max} belgi bo‘lishi kerak', { label, min, max });
   return s;
 }
 
 function int(v: unknown, min: number, max: number, label: string) {
   const n = Number(v);
-  if (v === '' || v == null || !Number.isInteger(n) || n < min || n > max) fail(400, `${label}: ${min} dan ${max} gacha butun son kiriting`);
+  if (v === '' || v == null || !Number.isInteger(n) || n < min || n > max) fail(400, '{label}: {min} dan {max} gacha butun son kiriting', { label, min, max });
   return n;
 }
 
@@ -156,7 +191,7 @@ function date(v: unknown) {
   return s;
 }
 
-const time = (v: unknown, label: string) => (typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? v : fail(400, `${label}ni kiriting`));
+const time = (v: unknown, label: string) => (typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? v : fail(400, '{label}ni kiriting', { label }));
 
 // --- Hisob va sessiya ---
 
@@ -211,8 +246,8 @@ async function needProfile(user: User) {
 async function profile(u: Row) {
   const [stats, photo, usage] = await Promise.all([
     u.role === 'worker'
-      ? one("SELECT ROUND(AVG(worker_rating), 1) rating, COUNT(*) FILTER (WHERE status = 'came') done FROM applications WHERE worker_id = ?", u.id)
-      : one('SELECT ROUND(AVG(a.business_rating), 1) rating FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE s.business_id = ?', u.id),
+      ? one(`SELECT ${WORKER_STATS(Number(u.id))}`).then((r) => trust(r ?? {}))
+      : one("SELECT ROUND(AVG(a.business_rating), 1) rating, COUNT(*) FILTER (WHERE a.status = 'came') hired FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE s.business_id = ?", u.id),
     one('SELECT updated_at FROM photos WHERE user_id = ?', u.id),
     aiUsage(u.id),
   ]);
@@ -226,6 +261,7 @@ async function profile(u: Row) {
     google: !!u.firebase_uid, complete: isComplete(u, !!photo),
     // Obuna: amaldagi tarif, Pro tugash sanasi (null = muddatsiz) va bugungi Farbo foydalanishi
     plan, plan_until: plan === 'pro' ? u.plan_until ?? null : null, ai_used: usage.ai, tts_used: usage.tts,
+    lang: isLang(u.lang) ? u.lang : 'uz',
     ...stats,
   };
 }
@@ -242,7 +278,7 @@ async function updateProfile({ user, body }: Ctx) {
     if (!body.birth_date) fail(400, 'Tug‘ilgan sanangizni kiriting');
     fields.birth_date = date(body.birth_date);
     const years = age(fields.birth_date)!;
-    if (years < MIN_AGE) fail(400, `Smenalarda ${MIN_AGE} yoshdan katta bo‘lganlar ishlay oladi`);
+    if (years < MIN_AGE) fail(400, 'Smenalarda {age} yoshdan katta bo‘lganlar ishlay oladi', { age: MIN_AGE });
     if (years > 80) fail(400, 'Tug‘ilgan sanani tekshiring');
     fields.gender = ['m', 'f'].includes(body.gender) ? body.gender : fail(400, 'Jinsingizni tanlang');
     fields.skills = JSON.stringify(Array.isArray(body.skills) ? [...new Set(body.skills.filter((s: unknown) => SKILLS.includes(s as string)))] : []);
@@ -298,6 +334,8 @@ async function changePassword(ctx: Ctx) {
 async function startSession(ctx: Ctx, userId: number) {
   const token = crypto.randomBytes(32).toString('base64url');
   await exec('INSERT INTO sessions (token, user_id) VALUES (?, ?)', token, userId);
+  // Saytda til tanlangan bo'lsa, Telegram xabarlari ham shu tilda bo'lsin
+  if (/(?:^|;\s*)lang=/.test(ctx.cookieHeader)) await exec('UPDATE users SET lang = ? WHERE id = ?', ctx.lang, userId);
   ctx.cookie = `sid=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 86400}${ctx.https ? '; Secure' : ''}`;
   return profile((await one('SELECT * FROM users WHERE id = ?', userId))!);
 }
@@ -317,10 +355,10 @@ const PHONE_TAKEN = 'Bu raqam bilan ro‘yxatdan o‘tilgan. Kirish sahifasidan 
 const NOT_FOUND = 'Bu raqam ro‘yxatdan o‘tmagan. Avval ro‘yxatdan o‘ting';
 
 // Ro'yxat 1-qadami: maydonlar to'g'ri va raqam bo'sh bo'lsa, Telegram'ga tasdiqlash kodi yuboriladi (qayta yuborish ham shu)
-async function registerCheck({ body }: Ctx) {
+async function registerCheck({ body, lang }: Ctx) {
   const f = userFields(body, body.google !== true);
   if (await one('SELECT 1 FROM users WHERE phone = ?', f.phone)) fail(409, PHONE_TAKEN);
-  await sendCode(f.phone);
+  await sendCode(f.phone, lang);
   return { phone: f.phone, bot: TELEGRAM_BOT };
 }
 
@@ -333,11 +371,12 @@ async function createUser(ctx: Ctx, firebaseUid: string | null = null, photoUrl 
   if (await one('SELECT 1 FROM users WHERE phone = ?', f.phone)) fail(409, PHONE_TAKEN);
   await verifyCode(f.phone, ctx.body.code);
   try {
-    // Google hisobida parol yo'q: tasodifiy parol xeshi telefon+parol bilan kirishni yopiq tutadi
+    // Google hisobida parol yo'q: tasodifiy parol xeshi telefon+parol bilan kirishni yopiq tutadi.
+    // Til — ro'yxatdan o'tgan paytdagi sayt tili: Telegram xabarlari shu tilda keladi
     const { lastInsertRowid } = await exec(
-      'INSERT INTO users (role, phone, name, org, pass, firebase_uid, first_name, last_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO users (role, phone, name, org, pass, firebase_uid, first_name, last_name, lang) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       f.role, f.phone, f.name, f.org, hash(firebaseUid ? crypto.randomBytes(32).toString('hex') : f.password), firebaseUid,
-      fit(first), fit(rest.join(' ')),
+      fit(first), fit(rest.join(' ')), ctx.lang,
     );
     if (photoUrl) await importGooglePhoto(Number(lastInsertRowid), photoUrl);
     return startSession(ctx, Number(lastInsertRowid));
@@ -426,10 +465,10 @@ async function google(ctx: Ctx) {
 }
 
 // Kod bilan kirish: raqam ro'yxatda bo'lsa, Telegram'ga kod yuboriladi; keyin { phone, code } bilan kiriladi
-async function loginCheck({ body }: Ctx) {
+async function loginCheck({ body, lang }: Ctx) {
   const p = phone(body.phone);
   if (!(await one('SELECT 1 FROM users WHERE phone = ?', p))) fail(404, NOT_FOUND);
-  await sendCode(p);
+  await sendCode(p, lang);
   return { phone: p, bot: TELEGRAM_BOT };
 }
 
@@ -440,20 +479,22 @@ async function codeLogin(ctx: Ctx) {
   return startSession(ctx, u.id);
 }
 
-// --- Telegram bot: tasdiqlash kodlari ---
+// --- Telegram bot: tasdiqlash kodlari, bildirishnomalar va eslatmalar ---
 // Foydalanuvchi @bot da /start bosib, "Raqamni yuborish" bilan Telegram tasdiqlagan raqamini yuboradi: raqam ↔ chat bog'lanadi.
-// Keyin saytda kod so'raganda kod shu chatga keladi. Token faqat serverda: TELEGRAM_BOT_TOKEN.
+// Keyin saytda kod so'raganda kod shu chatga keladi; smenalar haqidagi xabarlar ham shu chatga. Token faqat serverda: TELEGRAM_BOT_TOKEN.
 // test.ts TELEGRAM_API bilan soxta serverga yo'naltiradi
 // Vercel'ga nusxa olishda qo'shilib qoladigan bo'shliq, qator oxiri va qo'shtirnoq tozalanadi (cleanSecret)
 const tgToken = () => cleanSecret(process.env.TELEGRAM_BOT_TOKEN ?? '');
 // Webhook'ning maxfiy sarlavhasi tokendan olinadi: alohida sozlama shart emas, token almashsa u ham almashadi
 const tgSecret = () => (tgToken() ? crypto.createHash('sha256').update(`smena-webhook:${tgToken()}`).digest('hex').slice(0, 32) : '');
+// Webhook qabul qiladigan yangilanishlar: xabarlar va eslatmadagi tugmalar
+const TG_UPDATES = ['message', 'callback_query'];
 const CODE_TTL = "datetime('now', '-5 minutes')";
 const prettyPhone = (p: string) => p.replace(/^\+998(\d{2})(\d{3})(\d{2})(\d{2})$/, '+998 $1 $2 $3 $4');
 // Qaysi raqam bog'lanmaganini aytamiz: ko'pincha Telegram hisobidagi raqam saytda yozilganidan boshqacha bo'ladi
-const notLinked = (p: string) =>
-  `${prettyPhone(p)} raqami botga bog‘lanmagan. t.me/${TELEGRAM_BOT} botida /start bosing va pastdagi “📱 Raqamni yuborish” tugmasini bosing (raqamni qo‘lda yozmang). `
-  + 'Telegram hisobingizdagi raqam saytda yozganingiz bilan bir xil bo‘lishi kerak.';
+const notLinked = (p: string): never => fail(428,
+  '{phone} raqami botga bog‘lanmagan. t.me/{bot} botida /start bosing va pastdagi “📱 Raqamni yuborish” tugmasini bosing (raqamni qo‘lda yozmang). '
+  + 'Telegram hisobingizdagi raqam saytda yozganingiz bilan bir xil bo‘lishi kerak.', { phone: prettyPhone(p), bot: TELEGRAM_BOT });
 
 async function telegram(method: string, body: Row) {
   if (!tgToken()) fail(503, 'Telegram bot hali sozlanmagan: serverda TELEGRAM_BOT_TOKEN yo‘q');
@@ -468,8 +509,8 @@ async function telegram(method: string, body: Row) {
 const codeHash = (p: string, code: string) => crypto.createHmac('sha256', tgToken()).update(`${p}:${code}`).digest('hex');
 
 // Bir raqamga: ishlatilmagan kod bo'lsa, qayta yuborish 1 daqiqadan keyin; soatiga ko'pi bilan 5 ta kod
-async function sendCode(p: string) {
-  const link = await one('SELECT chat_id FROM telegram_links WHERE phone = ?', p) || fail(428, notLinked(p));
+async function sendCode(p: string, lang: Lang) {
+  const link = await one('SELECT chat_id FROM telegram_links WHERE phone = ?', p) || notLinked(p);
   const recent = await one(
     `SELECT COUNT(*) FILTER (WHERE used = 0 AND created_at > datetime('now', '-60 seconds')) fresh, COUNT(*) n
      FROM otp_codes WHERE phone = ? AND created_at > datetime('now', '-1 hour')`, p);
@@ -478,10 +519,10 @@ async function sendCode(p: string) {
   const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
   const sent = await telegram('sendMessage', {
     chat_id: link.chat_id,
-    text: `🔐 Smena tasdiqlash kodi: ${code}\n\nKodni hech kimga bermang — Smena xodimlari ham uni so‘ramaydi. Kod 5 daqiqa amal qiladi.`,
+    text: T(lang, '🔐 Smena tasdiqlash kodi: {code}\n\nKodni hech kimga bermang — Smena xodimlari ham uni so‘ramaydi. Kod 5 daqiqa amal qiladi.', { code }),
     protect_content: true,
   });
-  if (!sent.ok) fail(502, `Telegram’ga kod yuborib bo‘lmadi. t.me/${TELEGRAM_BOT} botini bloklamaganingizni tekshiring va /start bosing`);
+  if (!sent.ok) fail(502, 'Telegram’ga kod yuborib bo‘lmadi. t.me/{bot} botini bloklamaganingizni tekshiring va /start bosing', { bot: TELEGRAM_BOT });
   await exec('INSERT INTO otp_codes (phone, code_hash) VALUES (?, ?)', p, codeHash(p, code));
 }
 
@@ -500,21 +541,147 @@ async function verifyCode(p: string, code: unknown) {
   if (!rowsAffected) fail(400, 'Bu kod ishlatilgan. Yangi kod oling');
 }
 
-const CONTACT_KEYBOARD = { keyboard: [[{ text: '📱 Raqamni yuborish', request_contact: true }]], resize_keyboard: true, one_time_keyboard: true };
+const contactKeyboard = (lang: Lang) => ({ keyboard: [[{ text: T(lang, '📱 Raqamni yuborish'), request_contact: true }]], resize_keyboard: true, one_time_keyboard: true });
 
-// Telegram yuboradigan yangilanishlar: /start, kontakt (raqam) va boshqa xabarlar
+// --- Bildirishnomalar ---
+// Xabar foydalanuvchining o'z tilida, raqami botga bog'langan chatga boradi. Javobdan keyin yuboriladi (ctx.tasks):
+// bot bloklangan yoki tarmoq xatosi asosiy amalni (qabul, ariza) to'xtatmaydi
+type TgMessage = { text: string; reply_markup?: Row };
+function notify(ctx: { tasks: Promise<unknown>[] }, userId: number, build: (lang: Lang) => TgMessage) {
+  if (!tgToken()) return;
+  ctx.tasks.push((async () => {
+    const to = await one('SELECT u.lang, t.chat_id FROM users u JOIN telegram_links t ON t.phone = u.phone WHERE u.id = ? AND u.demo = 0', userId);
+    if (!to) return;
+    const lang = isLang(to.lang) ? to.lang : 'uz';
+    await telegram('sendMessage', { chat_id: to.chat_id, link_preview_options: { is_disabled: true }, ...build(lang) });
+  })().catch((e) => console.error('Telegram bildirishnoma', e)));
+}
+
+// Smena qatori: «Ofitsiant», Bahor to'yxonasi — Ertaga, 18:00–23:00
+const shiftLine = (lang: Lang, s: Row) => T(lang, '«{title}», {org} — {date}, {start}–{end}', {
+  title: s.title, org: s.org, date: dayName(lang, s.date), start: s.start_time, end: s.end_time,
+});
+// Ilova sahifasiga havola (bildirishnomalar ichida)
+const appLink = (ctx: { origin: string }, path: string) => `${ctx.origin || 'https://smena-uzb.vercel.app'}${path}`;
+
+// Smena boshlanishi va tugashi (Toshkent, UTC+5, yozgi vaqt yo'q); tugash boshlanishdan oldin bo'lsa — ertasi kuni (tungi smena)
+function shiftSpan(s: Row) {
+  const start = Date.parse(`${s.date}T${s.start_time}:00+05:00`);
+  let end = Date.parse(`${s.date}T${s.end_time}:00+05:00`);
+  if (end <= start) end += 864e5;
+  return { start, end };
+}
+const tashkentStamp = (ms: number) => new Date(ms + 5 * 3600_000).toISOString().slice(0, 16).replace('T', ' ');
+
+// --- Eslatmalar ---
+// Qabul qilingan ishchiga: smenadan bir kun oldin (kechqurun 18:00 dan keyin) va boshlanishidan 3 soat oldin, "Kelasizmi?" tugmalari bilan.
+// Har biri bir marta: "reminded" shartli UPDATE bilan oshiriladi, Vercel'ning bir nechta nusxasi bir vaqtda ishlasa ham ikki marta ketmaydi
+const confirmKeyboard = (lang: Lang, appId: number) => ({
+  inline_keyboard: [[{ text: T(lang, '✅ Kelaman'), callback_data: `c:${appId}:y` }, { text: T(lang, '❌ Kela olmayman'), callback_data: `c:${appId}:n` }]],
+});
+
+async function runReminders(ctx: { tasks: Promise<unknown>[]; origin: string }) {
+  if (!tgToken()) return 0;
+  const nowMs = Date.now();
+  const { date, time } = now();
+  const due = await all(
+    `SELECT a.id, a.worker_id, a.reminded, a.confirm, s.title, s.place, s.date, s.start_time, s.end_time, u.org
+     FROM applications a JOIN shifts s ON s.id = a.shift_id JOIN users u ON u.id = s.business_id
+     WHERE a.status = 'accepted' AND a.reminded < 2 AND s.date BETWEEN ? AND ?`,
+    date, tashkentDate(1),
+  );
+  let sent = 0;
+  for (const a of due) {
+    const { start } = shiftSpan(a);
+    if (start <= nowMs) continue;
+    // 3 soat ichida boshlanadi — 2-eslatma; ertangi smena va soat 18:00 dan keyin — 1-eslatma
+    const stage = start - nowMs <= 3 * 3600_000 ? 2 : a.date > date && time >= '18:00' && a.reminded < 1 ? 1 : 0;
+    if (!stage) continue;
+    const { rowsAffected } = await exec('UPDATE applications SET reminded = ? WHERE id = ? AND reminded < ?', stage, a.id, stage);
+    if (!rowsAffected) continue;
+    sent++;
+    notify(ctx, a.worker_id, (lang) => {
+      const vars = { shift: shiftLine(lang, a), place: a.place, start: a.start_time, link: appLink(ctx, '/ilova/arizalarim') };
+      if (stage === 1) return { text: T(lang, '⏰ Eslatma: ertaga smenangiz bor.\n{shift}\n📍 {place}\n\nKelasizmi?', vars), reply_markup: confirmKeyboard(lang, a.id) };
+      return a.confirm === 'yes'
+        ? { text: T(lang, '⏰ Eslatma: smenangiz {start} da boshlanadi.\n{shift}\n📍 {place}\n\nJoyiga yetib kelgach, ilovada “Keldim” tugmasini bosing: {link}', vars) }
+        : { text: T(lang, '⏰ Eslatma: smenangiz {start} da boshlanadi.\n{shift}\n📍 {place}\n\nKelasizmi?', vars), reply_markup: confirmKeyboard(lang, a.id) };
+    });
+  }
+  return sent;
+}
+
+// Eslatmalar daqiqasiga ko'pi bilan bir marta tekshiriladi: har nusxada xotirada, butun tizimda bazadagi meta yozuvi bilan
+let remindersCheckedAt = 0;
+async function remindersDue() {
+  await exec("INSERT INTO meta (key) VALUES ('reminders') ON CONFLICT (key) DO NOTHING");
+  const { rowsAffected } = await exec("UPDATE meta SET value = datetime('now') WHERE key = 'reminders' AND value < datetime('now', '-60 seconds')");
+  return rowsAffected > 0;
+}
+
+// Tashqi cron (GitHub Actions) yoki admin chaqiradi. Ochiq: faqat vaqti kelgan eslatmalarni yuboradi va daqiqada bir martadan ko'p ishlamaydi
+async function cronReminders(ctx: Ctx) {
+  if (!isAdmin(ctx.cookieHeader) && !(await remindersDue())) return { skipped: true };
+  return { sent: await runReminders(ctx) };
+}
+
+// Eslatmadagi tugma: "Kelaman" — biznesga xabar; "Kela olmayman" — smena ertaga bo'lsa ariza bepul bekor qilinadi,
+// smena kuni bo'lsa biznesga xabar boradi va u ishchini ilovada ozod qiladi (aks holda qoida bo'yicha "kelmadi")
+async function telegramCallback(ctx: Ctx, cq: Row) {
+  const answer = (text = '') => telegram('answerCallbackQuery', { callback_query_id: cq.id, text });
+  const m = /^c:(\d+):([yn])$/.exec(String(cq.data ?? ''));
+  if (!m) return answer();
+  // Tugmani faqat arizaning egasi (raqami shu chatga bog'langan ishchi) bosa oladi
+  const a = await one(
+    `SELECT a.id, a.status, a.confirm, a.worker_id, w.name worker, w.lang, s.id shift_id, s.business_id, s.title, s.date, s.start_time, s.end_time, b.org
+     FROM applications a JOIN users w ON w.id = a.worker_id JOIN telegram_links t ON t.phone = w.phone
+     JOIN shifts s ON s.id = a.shift_id JOIN users b ON b.id = s.business_id
+     WHERE a.id = ? AND t.chat_id = ?`, Number(m[1]), cq.from?.id);
+  const lang: Lang = isLang(a?.lang) ? a.lang : tgLang(cq.from?.language_code);
+  const done = (text: string) => Promise.all([
+    answer(text),
+    cq.message && telegram('editMessageReplyMarkup', { chat_id: cq.message.chat.id, message_id: cq.message.message_id, reply_markup: { inline_keyboard: [] } }),
+    cq.message && telegram('sendMessage', { chat_id: cq.message.chat.id, text }),
+  ]);
+  if (!a || a.status !== 'accepted' || a.confirm || shiftSpan(a).start <= Date.now()) {
+    await answer(T(lang, 'Bu smena uchun javob berilgan'));
+    return { ok: true };
+  }
+  const shift = (l: Lang) => shiftLine(l, a);
+  if (m[2] === 'y') {
+    await exec("UPDATE applications SET confirm = 'yes' WHERE id = ? AND confirm IS NULL", a.id);
+    notify(ctx, a.business_id, (l) => ({ text: T(l, '✅ {worker} kelishini tasdiqladi: {shift}', { worker: a.worker, shift: shift(l) }) }));
+    await done(T(lang, '✅ Kelishingizni tasdiqladingiz. Joyiga yetib kelgach, ilovada “Keldim” tugmasini bosing.'));
+  } else if (a.date > now().date) {
+    await exec("DELETE FROM applications WHERE id = ? AND status = 'accepted'", a.id);
+    notify(ctx, a.business_id, (l) => ({ text: T(l, '❌ {worker} arizasini bekor qildi: {shift}', { worker: a.worker, shift: shift(l) }) }));
+    await done(T(lang, '❌ Arizangiz bekor qilindi, ish beruvchiga xabar berdik. Bir kun oldin bekor qilish bepul.'));
+  } else {
+    await exec("UPDATE applications SET confirm = 'no' WHERE id = ? AND confirm IS NULL", a.id);
+    notify(ctx, a.business_id, (l) => ({
+      text: T(l, '⚠️ {worker} bugun kela olmasligini aytdi: {shift}\n\nIlovada uni ozod qilib, o‘rniga boshqa ishchi qabul qilishingiz mumkin: {link}',
+        { worker: a.worker, shift: shift(l), link: appLink(ctx, `/ilova/smena/${a.shift_id}`) }),
+    }));
+    await done(T(lang, '⚠️ Ish beruvchiga xabar berdik. Smena kuni bekor qilish “kelmadi” hisoblanadi: ish beruvchi sizni ozod qilsa, hisobingiz bloklanmaydi.'));
+  }
+  return { ok: true };
+}
+
+// Telegram yuboradigan yangilanishlar: /start, kontakt (raqam), eslatma tugmalari va boshqa xabarlar
 async function telegramWebhook(ctx: Ctx) {
   // Token yo'qligi alohida xato: bot ulanmay qolsa, sababini darhol ko'rish mumkin
   if (!tgSecret()) fail(503, 'Serverda TELEGRAM_BOT_TOKEN o‘rnatilmagan');
   if (!sameSecret(ctx.tgSecret, tgSecret())) fail(401, 'Ruxsat yo‘q');
+  if (ctx.body.callback_query) return telegramCallback(ctx, ctx.body.callback_query);
   const msg = ctx.body.message;
   const chat = msg?.chat?.id;
   if (!chat || msg.chat.type !== 'private') return { ok: true };
-  const reply = (text: string, extra: Row = {}) => telegram('sendMessage', { chat_id: chat, text, ...extra });
+  const lang = tgLang(msg.from?.language_code);
+  const reply = (text: string, extra: Row = {}) => telegram('sendMessage', { chat_id: chat, text: T(lang, text), ...extra });
   if (msg.contact) {
     // Faqat o'z raqami: boshqa odamning kontaktini yuborib, uning hisobiga kod olib bo'lmasin
     if (msg.contact.user_id !== msg.from?.id) {
-      await reply('Faqat o‘zingizning raqamingizni yuboring: pastdagi “📱 Raqamni yuborish” tugmasini bosing.', { reply_markup: CONTACT_KEYBOARD });
+      await reply('Faqat o‘zingizning raqamingizni yuboring: pastdagi “📱 Raqamni yuborish” tugmasini bosing.', { reply_markup: contactKeyboard(lang) });
       return { ok: true };
     }
     const digits = String(msg.contact.phone_number ?? '').replace(/\D/g, '');
@@ -527,17 +694,21 @@ async function telegramWebhook(ctx: Ctx) {
        ON CONFLICT (phone) DO UPDATE SET chat_id = excluded.chat_id, updated_at = datetime('now')`,
       `+${digits}`, chat,
     );
-    await reply(`✅ Raqamingiz bog‘landi: ${prettyPhone(`+${digits}`)}\n\nEndi saytga qaytib, aynan shu raqamni kiriting va kod so‘rang — kod shu chatga keladi.`, { reply_markup: { remove_keyboard: true } });
+    await telegram('sendMessage', {
+      chat_id: chat,
+      text: T(lang, '✅ Raqamingiz bog‘landi: {phone}\n\nEndi saytga qaytib, aynan shu raqamni kiriting va kod so‘rang — kod shu chatga keladi. Smenalar haqidagi xabarlar ham shu yerga keladi.', { phone: prettyPhone(`+${digits}`) }),
+      reply_markup: { remove_keyboard: true },
+    });
     return { ok: true };
   }
   // Raqamni qo'lda yozib yuborganlar: Telegram tasdiqlamagan raqamni qabul qilmaymiz, tugmani ko'rsatamiz
   if (typeof msg.text === 'string' && /^\+?[\d\s()-]{9,}$/.test(msg.text.trim())) {
-    await reply('Raqamni yozish shart emas: pastdagi “📱 Raqamni yuborish” tugmasini bosing — Telegram raqamingizni o‘zi yuboradi.', { reply_markup: CONTACT_KEYBOARD });
+    await reply('Raqamni yozish shart emas: pastdagi “📱 Raqamni yuborish” tugmasini bosing — Telegram raqamingizni o‘zi yuboradi.', { reply_markup: contactKeyboard(lang) });
     return { ok: true };
   }
   await reply(
-    'Assalomu alaykum! Men Smena botiman 👋\n\nSmena’da ro‘yxatdan o‘tish va kirish uchun tasdiqlash kodlarini shu yerga yuboraman.\n\nBoshlash uchun pastdagi “📱 Raqamni yuborish” tugmasini bosing.',
-    { reply_markup: CONTACT_KEYBOARD },
+    'Assalomu alaykum! Men Smena botiman 👋\n\nSmena’da ro‘yxatdan o‘tish va kirish uchun tasdiqlash kodlarini, smenalar haqidagi xabar va eslatmalarni shu yerga yuboraman.\n\nBoshlash uchun pastdagi “📱 Raqamni yuborish” tugmasini bosing.',
+    { reply_markup: contactKeyboard(lang) },
   );
   return { ok: true };
 }
@@ -574,6 +745,14 @@ async function login(ctx: Ctx) {
   return startSession(ctx, u!.id);
 }
 
+// Til: cookie (sayt shu tilda chiqadi) va kirgan bo'lsa bazada (Telegram xabarlari shu tilda)
+async function setLang(ctx: Ctx) {
+  const lang = isLang(ctx.body.lang) ? ctx.body.lang : fail(400, 'Tilni tanlang');
+  ctx.cookie = `lang=${lang}; SameSite=Lax; Path=/; Max-Age=${365 * 86400}${ctx.https ? '; Secure' : ''}`;
+  if (ctx.user) await exec('UPDATE users SET lang = ? WHERE id = ?', lang, ctx.user.id);
+  return { lang };
+}
+
 async function logout(ctx: Ctx) {
   const token = sessionToken(ctx.cookieHeader);
   if (token) await exec('DELETE FROM sessions WHERE token = ?', token);
@@ -583,55 +762,122 @@ async function logout(ctx: Ctx) {
 
 // --- Smenalar ---
 
-// shortcut: birinchi 200 ta ochiq smena, sahifalash yo'q; ro'yxat o'sganda tuman/sana filtri qo'shing
-function listShifts({ user }: Ctx) {
+const addDays = (iso: string, n: number) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+
+// Ochiq smenalar. Filtrlar (manzildagi ?...): q — qidiruv (lavozim, biznes, manzil, izoh), when — today | tomorrow | week | YYYY-MM-DD,
+// min_pay — eng kam haq, region va district — biznes joylashgan viloyat va tuman, mine=1 — ishchining ko'nikmalariga mos, sort=pay — avval qimmati.
+// fav — biznes meni sevimli qilgan, invited — biznes meni shu smenaga taklif qilgan.
+// shortcut: birinchi 200 ta, sahifalash yo'q
+async function listShifts({ user, query }: Ctx) {
+  const where = [OPEN], args: unknown[] = [...openArgs()];
+  const q = (query.get('q') ?? '').trim().slice(0, 60);
+  if (q) {
+    const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    where.push(`(${['s.title', 's.place', 'u.org', 's.note'].map((c) => `${c} LIKE ? ESCAPE '\\'`).join(' OR ')})`);
+    args.push(like, like, like, like);
+  }
+  const when = query.get('when') ?? '';
+  const day = when === 'today' ? now().date : when === 'tomorrow' ? tashkentDate(1) : /^\d{4}-\d{2}-\d{2}$/.test(when) ? when : '';
+  if (day) { where.push('s.date = ?'); args.push(day); }
+  if (when === 'week') { where.push('s.date <= ?'); args.push(addDays(now().date, 6)); }
+  const minPay = Number(query.get('min_pay'));
+  if (minPay > 0) { where.push('s.pay >= ?'); args.push(minPay); }
+  for (const col of ['region', 'district']) {
+    if (query.get(col)) { where.push(`u.${col} = ?`); args.push(query.get(col)); }
+  }
+  if (query.get('mine') === '1' && user?.role === 'worker') {
+    const skills = parseSkills(user.skills);
+    where.push(skills.length ? `s.title IN (${skills.map(() => '?').join(', ')})` : '0');
+    args.push(...skills);
+  }
+  const me = user?.id ?? 0;
   return all(
-    `SELECT s.*, u.org, ${ORG_RATING} org_rating, ${TAKEN} taken,
-       (SELECT status FROM applications x WHERE x.shift_id = s.id AND x.worker_id = ?) my_status
+    `SELECT s.*, u.org, u.region org_region, u.district org_district, ${ORG_RATING} org_rating, ${ORG_DONE} org_done, ${TAKEN} taken,
+       (SELECT status FROM applications x WHERE x.shift_id = s.id AND x.worker_id = ?) my_status,
+       EXISTS (SELECT 1 FROM favorites f WHERE f.business_id = s.business_id AND f.worker_id = ?) fav,
+       EXISTS (SELECT 1 FROM invites i WHERE i.shift_id = s.id AND i.worker_id = ?) invited
      FROM shifts s JOIN users u ON u.id = s.business_id
-     WHERE ${OPEN} ORDER BY s.date, s.start_time LIMIT 200`,
-    user?.id ?? 0, ...openArgs(),
+     WHERE ${where.join(' AND ')} ORDER BY ${query.get('sort') === 'pay' ? 's.pay DESC, s.date, s.start_time' : 's.date, s.start_time'} LIMIT 200`,
+    me, me, me, ...args,
   );
 }
 
-async function createShift({ user, body }: Ctx) {
+// Takroriy smena: repeat — daily (har kuni) yoki weekly (har hafta), times — jami nechta (birinchisi bilan, 2–12).
+// notify — sevimli ishchilarga Telegram'da xabar
+async function createShift(ctx: Ctx) {
+  const { user, body } = ctx;
   need(user, 'business');
   await needProfile(user);
   const d = date(body.date);
   if (d < now().date) fail(400, 'O‘tgan sanaga smena e’lon qilib bo‘lmaydi');
-  const { lastInsertRowid } = await exec(
-    'INSERT INTO shifts (business_id, title, place, date, start_time, end_time, pay, slots, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    user.id,
-    str(body.title, 2, 80, 'Lavozim'),
-    str(body.place, 2, 120, 'Manzil'),
-    d,
-    time(body.start, 'Boshlanish vaqti'),
-    time(body.end, 'Tugash vaqti'),
-    int(body.pay, 10000, 5000000, 'Haq'),
-    int(body.slots, 1, 50, 'Odam soni'),
-    typeof body.note === 'string' ? body.note.trim().slice(0, 500) : '',
-  );
-  return { id: Number(lastInsertRowid) };
+  const s = {
+    title: str(body.title, 2, 80, 'Lavozim'),
+    place: str(body.place, 2, 120, 'Manzil'),
+    start_time: time(body.start, 'Boshlanish vaqti'),
+    end_time: time(body.end, 'Tugash vaqti'),
+    pay: int(body.pay, 10000, 5000000, 'Haq'),
+    slots: int(body.slots, 1, 50, 'Odam soni'),
+    note: typeof body.note === 'string' ? body.note.trim().slice(0, 500) : '',
+  };
+  const step = !body.repeat || body.repeat === 'none' ? 0 : body.repeat === 'daily' ? 1 : body.repeat === 'weekly' ? 7 : fail(400, 'Takrorlashni tanlang');
+  const times = step ? int(body.times, 2, 12, 'Takrorlar soni') : 1;
+  const results = await db.batch(Array.from({ length: times }, (_, i) => ({
+    sql: 'INSERT INTO shifts (business_id, title, place, date, start_time, end_time, pay, slots, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    args: [user.id, s.title, s.place, addDays(d, i * step), s.start_time, s.end_time, s.pay, s.slots, s.note],
+  })), 'write');
+  const ids = results.map((r) => Number(r.lastInsertRowid));
+  if (body.notify === true || body.notify === '1') {
+    const favs = await all('SELECT f.worker_id FROM favorites f JOIN users w ON w.id = f.worker_id WHERE f.business_id = ? AND w.blocked = 0', user.id);
+    for (const f of favs) {
+      notify(ctx, f.worker_id, (lang) => ({
+        text: T(lang, times > 1
+          ? '⭐ {org} sizni sevimli ishchilar ro‘yxatiga qo‘shgan va {count} ta yangi smena e’lon qildi. Birinchisi:\n{shift}\n💰 {pay}\n\nAriza berish: {link}'
+          : '⭐ {org} sizni sevimli ishchilar ro‘yxatiga qo‘shgan va yangi smena e’lon qildi:\n{shift}\n💰 {pay}\n\nAriza berish: {link}',
+        { org: user.org, count: times, shift: shiftLine(lang, { ...s, date: d, org: user.org }), pay: money(lang, s.pay), link: appLink(ctx, '/ilova/smenalar') }),
+      }));
+    }
+  }
+  return { id: ids[0], ids };
 }
 
+// Ishchining ishonch ko'rsatkichlari (w — ishchi id ustuni yoki soni): o'rtacha baho, bajargan, kelmagan va "Keldim" belgilagan smenalari
+const WORKER_STATS = (w: string | number) => `
+  (SELECT ROUND(AVG(worker_rating), 1) FROM applications WHERE worker_id = ${w}) rating,
+  (SELECT COUNT(*) FROM applications WHERE worker_id = ${w} AND status = 'came') done,
+  (SELECT COUNT(*) FROM applications WHERE worker_id = ${w} AND status = 'noshow') noshows,
+  (SELECT COUNT(*) FROM applications WHERE worker_id = ${w} AND status = 'came' AND checkin_at IS NOT NULL) checkins`;
+
+// Kelish foizi (qabul qilingan smenalarning nechtasiga kelgan) va belgi: new — hali smena yo'q,
+// reliable — 5+ smena va birorta ham kelmay qolmagan, top — 10+ smena, kelmay qolmagan va ★4.8+
+function trust(r: Row) {
+  const done = Number(r.done ?? 0), noshows = Number(r.noshows ?? 0), rating = r.rating == null ? null : Number(r.rating);
+  const total = done + noshows;
+  return {
+    rating, done, noshows, checkins: Number(r.checkins ?? 0),
+    reliability: total ? Math.round((done * 100) / total) : null,
+    badge: !total ? 'new' : noshows ? null : done >= 10 && (rating ?? 0) >= 4.8 ? 'top' : done >= 5 ? 'reliable' : null,
+  };
+}
+
+// Biznesning o'z smenasi (arizachilar bilan); "Nusxa olish" ham shu ma'lumotdan formani to'ldiradi
 async function shiftDetail({ user, id }: Ctx) {
   need(user, 'business');
   const shift = await one(`SELECT s.*, u.org, ${TAKEN} taken FROM shifts s JOIN users u ON u.id = s.business_id WHERE s.id = ? AND s.business_id = ?`, id, user.id)
     || fail(404, 'Smena topilmadi');
-  // Telefon raqam faqat qabul qilingandan keyin ochiladi; profil (rasm, yosh, tuman, ko'nikmalar) darhol ko'rinadi
+  // Telefon raqam faqat qabul qilingandan keyin ochiladi; profil (rasm, yosh, tuman, ko'nikmalar, ishonch) darhol ko'rinadi
   const applicants = await all(
-    `SELECT a.id, a.status, a.worker_rating, u.id worker_id, u.name, u.blocked, u.birth_date, u.gender, u.region, u.district, u.skills, u.about,
+    `SELECT a.id, a.status, a.worker_rating, a.confirm, a.checkin_at, u.id worker_id, u.name, u.blocked, u.birth_date, u.gender, u.region, u.district, u.skills, u.about,
        CASE WHEN a.status IN ('accepted', 'came', 'noshow') THEN u.phone END phone,
        (SELECT updated_at FROM photos WHERE user_id = u.id) photo_v,
-       (SELECT ROUND(AVG(worker_rating), 1) FROM applications WHERE worker_id = u.id) rating,
-       (SELECT COUNT(*) FROM applications WHERE worker_id = u.id AND status = 'came') done
+       EXISTS (SELECT 1 FROM favorites f WHERE f.business_id = ? AND f.worker_id = u.id) favorite,
+       ${WORKER_STATS('u.id')}
      FROM applications a JOIN users u ON u.id = a.worker_id WHERE a.shift_id = ? ORDER BY a.id`,
-    id,
+    user.id, id,
   );
   return {
     shift,
-    applicants: applicants.map(({ worker_id, birth_date, photo_v, skills, ...a }) => ({
-      ...a, age: age(birth_date), skills: parseSkills(skills), photo: photo_v ? photoUrl(worker_id, photo_v) : null,
+    applicants: applicants.map(({ birth_date, photo_v, skills, ...a }) => ({
+      ...a, ...trust(a), favorite: !!a.favorite, age: age(birth_date), skills: parseSkills(skills), photo: photo_v ? photoUrl(a.worker_id, photo_v) : null,
     })),
   };
 }
@@ -640,7 +886,9 @@ function myShifts({ user }: Ctx) {
   need(user, 'business');
   return all(
     `SELECT s.*, u.org, ${TAKEN} taken,
-       (SELECT COUNT(*) FROM applications x WHERE x.shift_id = s.id AND x.status = 'pending') pending
+       (SELECT COUNT(*) FROM applications x WHERE x.shift_id = s.id AND x.status = 'pending') pending,
+       (SELECT COUNT(*) FROM applications x WHERE x.shift_id = s.id AND x.status = 'accepted' AND x.confirm = 'yes') confirmed,
+       (SELECT COUNT(*) FROM applications x WHERE x.shift_id = s.id AND x.checkin_at IS NOT NULL) checked_in
      FROM shifts s JOIN users u ON u.id = s.business_id
      WHERE s.business_id = ? ORDER BY s.date DESC, s.start_time DESC`,
     user.id,
@@ -649,11 +897,12 @@ function myShifts({ user }: Ctx) {
 
 // --- Arizalar ---
 
-async function apply({ user, id }: Ctx) {
+async function apply(ctx: Ctx) {
+  const { user, id } = ctx;
   need(user, 'worker');
   if (user.blocked) fail(403, 'Qabul qilingan smenaga kelmaganingiz uchun ariza bera olmaysiz');
   await needProfile(user);
-  const s = await one(`SELECT s.*, ${TAKEN} taken FROM shifts s WHERE s.id = ? AND ${OPEN}`, id, ...openArgs())
+  const s = await one(`SELECT s.*, u.org, ${TAKEN} taken FROM shifts s JOIN users u ON u.id = s.business_id WHERE s.id = ? AND ${OPEN}`, id, ...openArgs())
     || fail(404, 'Smena topilmadi yoki boshlanib bo‘lgan');
   if (s.demo) fail(409, 'Bu demo smena: namuna uchun ko‘rsatilgan, ariza qabul qilinmaydi');
   if (s.taken >= s.slots) fail(409, 'Smenada bo‘sh joy qolmadi');
@@ -663,26 +912,41 @@ async function apply({ user, id }: Ctx) {
     if (isUnique(e)) fail(409, 'Bu smenaga ariza bergansiz');
     throw e;
   }
+  notify(ctx, s.business_id, (lang) => ({
+    text: T(lang, '📝 Yangi ariza: {worker}\n{shift}\n\nArizalarni ko‘rish: {link}', { worker: user.name, shift: shiftLine(lang, s), link: appLink(ctx, `/ilova/smena/${s.id}`) }),
+  }));
   return { ok: true };
 }
 
-function myApplications({ user }: Ctx) {
+// can_checkin: "Keldim" tugmasi hozir ishlaydimi (smena boshlanishidan 1 soat oldindan tugaguncha)
+async function myApplications({ user }: Ctx) {
   need(user, 'worker');
-  return all(
-    `SELECT a.id, a.status, a.business_rating, s.title, s.place, s.date, s.start_time, s.end_time, s.pay, s.note, u.org,
+  const rows = await all(
+    `SELECT a.id, a.status, a.business_rating, a.confirm, a.checkin_at, s.id shift_id, s.title, s.place, s.date, s.start_time, s.end_time, s.pay, s.note, u.org,
        CASE WHEN a.status IN ('accepted', 'came', 'noshow') THEN u.phone END phone
      FROM applications a JOIN shifts s ON s.id = a.shift_id JOIN users u ON u.id = s.business_id
      WHERE a.worker_id = ? ORDER BY s.date DESC, s.start_time DESC`,
     user.id,
   );
+  const t = Date.now();
+  return rows.map((a) => {
+    const { start, end } = shiftSpan(a);
+    return { ...a, can_checkin: a.status === 'accepted' && !a.checkin_at && t >= start - 3600_000 && t <= end };
+  });
 }
 
-// Biznes arizaga javob beradi yoki smenadan keyin kelgan-kelmaganini belgilaydi
-async function decide({ user, id, body }: Ctx) {
+// Biznes arizaga javob beradi, smenadan keyin kelgan-kelmaganini belgilaydi yoki
+// smena kuni "kela olmayman" degan ishchini ozod qiladi (release: bloklanmaydi, joy bo'shaydi)
+async function decide(ctx: Ctx) {
+  const { user, id, body } = ctx;
   need(user, 'business');
-  const a = await one('SELECT a.*, s.slots, s.date FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE a.id = ? AND s.business_id = ?', id, user.id)
+  const a = await one(
+    `SELECT a.*, s.slots, s.date, s.title, s.place, s.start_time, s.end_time, s.pay, u.org, u.phone org_phone
+     FROM applications a JOIN shifts s ON s.id = a.shift_id JOIN users u ON u.id = s.business_id WHERE a.id = ? AND s.business_id = ?`, id, user.id)
     || fail(404, 'Ariza topilmadi');
   const { action } = body;
+  const tell = (text: string, vars: (lang: Lang) => Vars = () => ({})) =>
+    notify(ctx, a.worker_id, (lang) => ({ text: T(lang, text, { shift: shiftLine(lang, a), ...vars(lang) }) }));
   if (action === 'accept' || action === 'reject') {
     if (a.status !== 'pending') fail(409, 'Bu arizaga javob berilgan');
     // Joy borligini tekshirish va qabul qilish bitta so'rovda: ikki biznes oynasi bir vaqtda bossa ham joydan oshmaydi
@@ -696,6 +960,12 @@ async function decide({ user, id, body }: Ctx) {
       const fresh = await one('SELECT status FROM applications WHERE id = ?', id);
       fail(409, fresh?.status === 'pending' ? 'Smenada bo‘sh joy qolmadi' : 'Bu arizaga javob berilgan');
     }
+    if (action === 'accept') {
+      tell('✅ Arizangiz qabul qilindi!\n{shift}\n📍 {place}\n💰 {pay}\n☎️ Ish beruvchi: {phone}\n\nSmenadan oldin eslatma yuboramiz. Kela olmasangiz, kamida bir kun oldin bekor qiling, aks holda hisobingiz bloklanadi.',
+        (lang) => ({ place: a.place, pay: money(lang, a.pay), phone: prettyPhone(a.org_phone) }));
+    } else {
+      tell('Arizangiz rad etildi: {shift}\n\nBoshqa smenalar: {link}', () => ({ link: appLink(ctx, '/ilova/smenalar') }));
+    }
   } else if (action === 'came' || action === 'noshow') {
     if (a.status !== 'accepted') fail(409, 'Faqat qabul qilingan ishchini belgilash mumkin');
     if (a.date > now().date) fail(409, 'Kelgan-kelmaganini smena kuni belgilaysiz');
@@ -704,6 +974,16 @@ async function decide({ user, id, body }: Ctx) {
     if (action === 'noshow') steps.push({ sql: 'UPDATE users SET blocked = 1 WHERE id = ?', args: [a.worker_id] });
     const [marked] = await db.batch(steps, 'write');
     if (!marked.rowsAffected) fail(409, 'Bu ishchi allaqachon belgilangan');
+    if (action === 'came') {
+      tell('⭐ Smena bajarildi: {shift}\nSizga qo‘yilgan baho: {rating} / 5\n\nIsh beruvchini ham baholang: {link}', () => ({ rating, link: appLink(ctx, '/ilova/arizalarim') }));
+    } else {
+      tell('⚠️ Siz {shift} smenasiga kelmadi deb belgilandingiz va hisobingiz bloklandi.\nXato bo‘lsa, yozing: {contact}', () => ({ contact: PLAN_CONTACT.label }));
+    }
+  } else if (action === 'release') {
+    if (a.status !== 'accepted' || a.confirm !== 'no') fail(409, 'Faqat kela olmasligini aytgan ishchini ozod qilish mumkin');
+    const { rowsAffected } = await exec("UPDATE applications SET status = 'rejected' WHERE id = ? AND status = 'accepted'", id);
+    if (!rowsAffected) fail(409, 'Bu ishchi allaqachon belgilangan');
+    tell('Ish beruvchi sizni smenadan ozod qildi: {shift}. Hisobingiz bloklanmaydi.');
   } else {
     fail(400, 'Noma’lum amal');
   }
@@ -712,7 +992,9 @@ async function decide({ user, id, body }: Ctx) {
 
 async function workerApplication(user: User | undefined, id: number) {
   need(user, 'worker');
-  return await one('SELECT a.*, s.date FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE a.id = ? AND a.worker_id = ?', id, user.id)
+  return await one(
+    `SELECT a.*, s.date, s.start_time, s.end_time, s.title, s.business_id, u.org
+     FROM applications a JOIN shifts s ON s.id = a.shift_id JOIN users u ON u.id = s.business_id WHERE a.id = ? AND a.worker_id = ?`, id, user.id)
     || fail(404, 'Ariza topilmadi');
 }
 
@@ -724,8 +1006,9 @@ async function rate({ user, id, body }: Ctx) {
   return { ok: true };
 }
 
-async function cancel({ user, id }: Ctx) {
-  await workerApplication(user, id);
+async function cancel(ctx: Ctx) {
+  const { user, id } = ctx;
+  const a = await workerApplication(user, id);
   // Smena kuni bekor qilish biznesni odamsiz qoldiradi; u holat "kelmadi" hisoblanadi
   const { rowsAffected } = await exec(
     `DELETE FROM applications WHERE id = ? AND (status = 'pending'
@@ -733,6 +1016,76 @@ async function cancel({ user, id }: Ctx) {
     id, now().date,
   );
   if (!rowsAffected) fail(409, 'Qabul qilingan smenani kamida bir kun oldin bekor qilish mumkin');
+  notify(ctx, a.business_id, (lang) => ({ text: T(lang, '❌ {worker} arizasini bekor qildi: {shift}', { worker: user!.name, shift: shiftLine(lang, a) }) }));
+  return { ok: true };
+}
+
+// "Keldim": ishchi joyiga yetib kelganini belgilaydi (smena boshlanishidan 1 soat oldindan tugaguncha). Biznesga darhol xabar boradi;
+// "keldi" bahosini baribir biznes qo'yadi
+async function checkin(ctx: Ctx) {
+  const a = await workerApplication(ctx.user, ctx.id);
+  if (a.status !== 'accepted') fail(409, 'Faqat qabul qilingan smenada “Keldim” deb belgilash mumkin');
+  if (a.checkin_at) fail(409, 'Siz allaqachon “Keldim” deb belgilagansiz');
+  const { start, end } = shiftSpan(a);
+  if (Date.now() < start - 3600_000) fail(409, 'Smenaga hali erta: “Keldim” ni smena boshlanishidan bir soat oldin bosish mumkin');
+  if (Date.now() > end) fail(409, 'Smena tugagan: endi “Keldim” ni bosib bo‘lmaydi');
+  const at = tashkentStamp(Date.now());
+  const { rowsAffected } = await exec("UPDATE applications SET checkin_at = ?, confirm = 'yes' WHERE id = ? AND status = 'accepted' AND checkin_at IS NULL", at, a.id);
+  if (!rowsAffected) fail(409, 'Siz allaqachon “Keldim” deb belgilagansiz');
+  notify(ctx, a.business_id, (lang) => ({ text: T(lang, '📍 {worker} joyiga keldi ({time}): {shift}', { worker: ctx.user!.name, time: at.slice(11), shift: shiftLine(lang, a) }) }));
+  return { ok: true, checkin_at: at };
+}
+
+// --- Sevimli ishchilar ---
+// Biznes faqat o'z smenasiga ariza bergan ishchini sevimli qila oladi. Yangi smena e'lon qilsa, sevimlilarga xabar boradi
+async function setFavorite({ user, id, body }: Ctx) {
+  need(user, 'business');
+  if (!(await one('SELECT 1 FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE a.worker_id = ? AND s.business_id = ?', id, user.id))) fail(404, 'Ishchi topilmadi');
+  const on = body.on !== false;
+  await exec(on
+    ? 'INSERT INTO favorites (business_id, worker_id) VALUES (?, ?) ON CONFLICT DO NOTHING'
+    : 'DELETE FROM favorites WHERE business_id = ? AND worker_id = ?', user.id, id);
+  return { favorite: on };
+}
+
+// Sevimlilar ro'yxati: ishonch ko'rsatkichlari, men bilan necha smena ishlagani; telefon — avval qabul qilingan bo'lsa
+async function listFavorites({ user }: Ctx) {
+  need(user, 'business');
+  const mine = (status: string) => `FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE a.worker_id = u.id AND s.business_id = f.business_id AND a.status IN (${status})`;
+  const rows = await all(
+    `SELECT u.id, u.name, u.blocked, u.region, u.district, u.skills, u.birth_date,
+       (SELECT updated_at FROM photos WHERE user_id = u.id) photo_v,
+       (SELECT COUNT(*) ${mine("'came'")}) with_me,
+       (SELECT MAX(s.date) ${mine("'came'")}) last_date,
+       CASE WHEN EXISTS (SELECT 1 ${mine("'accepted', 'came', 'noshow'")}) THEN u.phone END phone,
+       ${WORKER_STATS('u.id')}
+     FROM favorites f JOIN users u ON u.id = f.worker_id WHERE f.business_id = ? ORDER BY f.created_at DESC`,
+    user.id,
+  );
+  return rows.map(({ photo_v, skills, birth_date, ...r }) => ({
+    ...r, ...trust(r), age: age(birth_date), skills: parseSkills(skills), photo: photo_v ? photoUrl(r.id, photo_v) : null,
+  }));
+}
+
+// Sevimli ishchini o'zimning ochiq smenamga taklif qilish: unga Telegram'da xabar boradi, ro'yxatda smena "Sizni taklif qilishdi" bilan chiqadi
+async function inviteFavorite(ctx: Ctx) {
+  const { user, id, body } = ctx;
+  need(user, 'business');
+  if (!(await one('SELECT 1 FROM favorites WHERE business_id = ? AND worker_id = ?', user.id, id))) fail(404, 'Avval ishchini sevimlilarga qo‘shing');
+  const s = await one(`SELECT s.*, u.org, ${TAKEN} taken FROM shifts s JOIN users u ON u.id = s.business_id WHERE s.id = ? AND s.business_id = ? AND ${OPEN}`,
+    Number(body.shift_id), user.id, ...openArgs()) || fail(404, 'Smena topilmadi yoki boshlanib bo‘lgan');
+  if (s.taken >= s.slots) fail(409, 'Smenada bo‘sh joy qolmadi');
+  if (await one('SELECT 1 FROM applications WHERE shift_id = ? AND worker_id = ?', s.id, id)) fail(409, 'Bu ishchi bu smenaga ariza bergan');
+  try {
+    await exec('INSERT INTO invites (shift_id, worker_id) VALUES (?, ?)', s.id, id);
+  } catch (e) {
+    if (isUnique(e)) fail(409, 'Bu ishchi bu smenaga taklif qilingan');
+    throw e;
+  }
+  notify(ctx, id, (lang) => ({
+    text: T(lang, '💌 {org} sizni smenaga taklif qilmoqda:\n{shift}\n📍 {place}\n💰 {pay}\n\nAriza berish: {link}',
+      { org: s.org, shift: shiftLine(lang, s), place: s.place, pay: money(lang, s.pay), link: appLink(ctx, '/ilova/smenalar') }),
+  }));
   return { ok: true };
 }
 
@@ -788,15 +1141,15 @@ async function aiLimit(ctx: Ctx, kind: 'ai' | 'tts') {
     const plan = activePlan(ctx.user);
     [key, max, since] = [`${kind}:u${ctx.user.id}`, PLANS[plan][kind], '-1 day'];
     message = plan === 'pro'
-      ? `Bugungi Pro limit tugadi: kuniga ${max} ta ${what}. Ertaga davom etasiz`
-      : `Bugungi bepul limit tugadi: kuniga ${max} ta ${what}. Pro obuna bilan ${PLANS.pro[kind]} ta: Profil → Obuna`;
+      ? 'Bugungi Pro limit tugadi: kuniga {max} ta {what}. Ertaga davom etasiz'
+      : 'Bugungi bepul limit tugadi: kuniga {max} ta {what}. Pro obuna bilan {pro} ta: Profil → Obuna';
   } else {
     [key, max, since] = [`${kind}:${ctx.ip}`, 15, '-10 minutes'];
     message = 'Mehmon sifatida juda ko‘p so‘radingiz. Ro‘yxatdan o‘ting yoki 10 daqiqadan keyin davom eting';
   }
   const r = await one("SELECT COUNT(*) n FROM ai_calls WHERE key = ? AND at > datetime('now', ?)", key, since);
   const used = Number(r?.n);
-  if (used >= max) fail(429, message);
+  if (used >= max) fail(429, message, { max, what, pro: PLANS.pro[kind] });
   await db.batch([
     "DELETE FROM ai_calls WHERE at <= datetime('now', '-1 day')",
     { sql: 'INSERT INTO ai_calls (key) VALUES (?)', args: [key] },
@@ -868,6 +1221,13 @@ function askInput(body: Row) {
   return { audio, history, part: audio ? { inlineData: { mimeType: 'audio/wav', data: audio.toString('base64') } } : { text } };
 }
 
+// Foydalanuvchi sayt tilini rus yoki ingliz qilgan bo'lsa, Farbo shu tilda javob beradi
+const FARBO_LANG: Record<Lang, string> = {
+  uz: '',
+  ru: '\n- MUHIM: foydalanuvchi rus tilini tanlagan. "Faqat o‘zbek tilida" qoidasi o‘rniga hamma javobni (reply va speech) rus tilida yoz; speech da raqamlarni rus tilida so‘z bilan yoz.',
+  en: '\n- MUHIM: foydalanuvchi ingliz tilini tanlagan. "Faqat o‘zbek tilida" qoidasi o‘rniga hamma javobni (reply va speech) ingliz tilida yoz; speech da raqamlarni ingliz tilida so‘z bilan yoz.',
+};
+
 // Qoidalar + ma'lumotlar bilan Gemini'dan JSON javob; reply bo'sh bo'lsa xato
 async function farboJson(rules: string, data: Row, input: ReturnType<typeof askInput>, schema: Row) {
   const res = await gemini(AI_MODELS(), {
@@ -891,7 +1251,7 @@ const idsOf = (v: unknown) => (Array.isArray(v) ? v.map(Number).filter((id) => N
 async function askFarbo(ctx: Ctx) {
   const input = askInput(ctx.body);
   const left = await aiLimit(ctx, 'ai');
-  const { out, heard, reply, speech } = await farboJson(FARBO_RULES, await aiContext(ctx.user), input, AI_SCHEMA);
+  const { out, heard, reply, speech } = await farboJson(FARBO_RULES + FARBO_LANG[ctx.lang], await aiContext(ctx.user), input, AI_SCHEMA);
   // Faqat kontekstdagi ochiq smenalar: model o'ylab topgan id kartochka bo'lib chiqmaydi
   const open = (await listShifts(ctx)) as Row[];
   const shifts = idsOf(out.shift_ids).map((id) => open.find((s) => s.id === id)).filter(Boolean).slice(0, 5);
@@ -948,18 +1308,19 @@ async function askFarboAdmin(ctx: Ctx) {
 
 // Javobni ovozga aylantiradi: WAV fayl qaytadi
 async function speak(ctx: Ctx) {
-  // Qolib ketgan raqamlar ham o'zbekcha o'qilsin: ovoz modeli "250" ni inglizcha aytib yuboradi
-  const text = spellNumbers(str(ctx.body.text, 1, 1200, 'Matn'));
+  // Qolib ketgan raqamlar ham o'zbekcha o'qilsin: ovoz modeli "250" ni inglizcha aytib yuboradi (rus va inglizda model o'zi o'qiydi)
+  const raw = str(ctx.body.text, 1, 1200, 'Matn');
+  const text = ctx.lang === 'uz' ? spellNumbers(raw) : raw;
   await aiLimit(ctx, 'tts');
   const res = await gemini(TTS_MODELS(), {
     contents: [{ parts: [{ text }] }],
-    generationConfig: { responseModalities: ['AUDIO'], speechConfig: { languageCode: 'uz-UZ', voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } } },
+    generationConfig: { responseModalities: ['AUDIO'], speechConfig: { languageCode: { uz: 'uz-UZ', ru: 'ru-RU', en: 'en-US' }[ctx.lang], voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } } },
   });
   const part = res.candidates?.[0]?.content?.parts?.find((p: Row) => p.inlineData)?.inlineData || fail(502, 'Ovoz tayyorlanmadi');
-  const raw = Buffer.from(part.data, 'base64');
+  const audio = Buffer.from(part.data, 'base64');
   // Ba'zi modellar WAV emas, xom PCM (audio/L16;rate=24000) beradi: brauzer o'ynashi uchun WAV sarlavhasini qo'shamiz
   const pcm = /audio\/L16/i.test(part.mimeType) ? Number(/rate=(\d+)/.exec(part.mimeType)?.[1] || 24000) : 0;
-  const wav = pcm ? Buffer.concat([wavHeader(raw.length, pcm), raw]) : raw;
+  const wav = pcm ? Buffer.concat([wavHeader(audio.length, pcm), audio]) : audio;
   ctx.file = { type: 'audio/wav', body: wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.length) as ArrayBuffer };
 }
 
@@ -1155,8 +1516,10 @@ async function adminDeleteUser(ctx: Ctx) {
   needAdmin(ctx);
   const u = await one('SELECT id, phone FROM users WHERE id = ?', ctx.id) || fail(404, 'Foydalanuvchi topilmadi');
   const own = '(SELECT id FROM shifts WHERE business_id = ?)';
-  const [apps, shifts] = await db.batch([
+  const [apps, , , shifts] = await db.batch([
     { sql: `DELETE FROM applications WHERE worker_id = ? OR shift_id IN ${own}`, args: [u.id, u.id] },
+    { sql: `DELETE FROM invites WHERE worker_id = ? OR shift_id IN ${own}`, args: [u.id, u.id] },
+    { sql: 'DELETE FROM favorites WHERE business_id = ? OR worker_id = ?', args: [u.id, u.id] },
     { sql: 'DELETE FROM shifts WHERE business_id = ?', args: [u.id] },
     { sql: 'DELETE FROM sessions WHERE user_id = ?', args: [u.id] },
     { sql: 'DELETE FROM photos WHERE user_id = ?', args: [u.id] },
@@ -1174,7 +1537,7 @@ async function adminTelegram(ctx: Ctx) {
   if (!tgToken()) return { configured: false };
   if (ctx.body.action === 'connect') {
     if (!ctx.origin.startsWith('https://')) fail(400, 'Botni faqat https manzildagi (jonli) saytdan ulash mumkin');
-    const set = await telegram('setWebhook', { url: `${ctx.origin}/api/telegram/webhook`, secret_token: tgSecret(), allowed_updates: ['message'], drop_pending_updates: true });
+    const set = await telegram('setWebhook', { url: `${ctx.origin}/api/telegram/webhook`, secret_token: tgSecret(), allowed_updates: TG_UPDATES, drop_pending_updates: true });
     if (!set.ok) fail(502, `Telegram webhook o‘rnatilmadi: ${set.description ?? ''}`);
     await telegram('setMyCommands', { commands: [{ command: 'start', description: 'Raqamni bog‘lash va kod olish' }] });
   }
@@ -1243,12 +1606,14 @@ async function removeDemo() {
   const shifts = `(SELECT id FROM shifts WHERE demo = 1 OR business_id IN ${users})`;
   const result = await db.batch([
     `DELETE FROM applications WHERE shift_id IN ${shifts}`,
+    `DELETE FROM invites WHERE shift_id IN ${shifts}`,
+    `DELETE FROM favorites WHERE business_id IN ${users}`,
     `DELETE FROM sessions WHERE user_id IN ${users}`,
     `DELETE FROM photos WHERE user_id IN ${users}`,
     `DELETE FROM shifts WHERE demo = 1 OR business_id IN ${users}`,
     'DELETE FROM users WHERE demo = 1',
   ], 'write');
-  return result[3].rowsAffected;
+  return result[5].rowsAffected;
 }
 
 // { action: 'add' } — demo smenalar (qayta bosilsa eskisi o'chib, sanalari yangilanadi); { action: 'remove' } — hammasini o'chiradi
@@ -1298,6 +1663,8 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['POST', /^\/api\/login\/check$/, loginCheck],
   ['POST', /^\/api\/login\/code$/, codeLogin],
   ['POST', /^\/api\/telegram\/webhook$/, telegramWebhook],
+  ['GET', /^\/api\/cron\/reminders$/, cronReminders],
+  ['POST', /^\/api\/lang$/, setLang],
   ['POST', /^\/api\/login$/, login],
   ['POST', /^\/api\/google$/, google],
   ['POST', /^\/api\/logout$/, logout],
@@ -1317,13 +1684,37 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['POST', /^\/api\/applications\/(\d+)$/, decide],
   ['POST', /^\/api\/applications\/(\d+)\/rate$/, rate],
   ['POST', /^\/api\/applications\/(\d+)\/cancel$/, cancel],
+  ['POST', /^\/api\/applications\/(\d+)\/checkin$/, checkin],
+  ['GET', /^\/api\/favorites$/, listFavorites],
+  ['POST', /^\/api\/favorites\/(\d+)\/invite$/, inviteFavorite],
+  ['POST', /^\/api\/favorites\/(\d+)$/, setFavorite],
 ];
 
-export type ApiRequest = { method: string; path: string; cookie: string | null; contentType: string | null; body: string; https: boolean; ip?: string; tgSecret?: string | null; origin?: string };
+// query: manzildagi ?... qismi; defer: javobdan keyin bajariladigan ishlar uchun (Vercel'da next/server after). Berilmasa (test.ts), ular javobdan oldin kutiladi
+export type ApiRequest = {
+  method: string; path: string; cookie: string | null; contentType: string | null; body: string; https: boolean;
+  ip?: string; tgSecret?: string | null; origin?: string; query?: string; defer?: (work: Promise<unknown>) => void;
+};
 export type ApiResponse = { status: number; data: unknown; cookie?: string; file?: FileOut };
 
 export async function handle(req: ApiRequest): Promise<ApiResponse> {
-  const ctx: Ctx = { user: undefined, body: {}, id: 0, cookieHeader: req.cookie ?? '', https: req.https, ip: req.ip || 'unknown', tgSecret: req.tgSecret ?? '', origin: req.origin ?? '' };
+  const ctx: Ctx = {
+    user: undefined, body: {}, id: 0, cookieHeader: req.cookie ?? '', https: req.https, ip: req.ip || 'unknown', tgSecret: req.tgSecret ?? '', origin: req.origin ?? '',
+    lang: langFromCookie(req.cookie), query: new URLSearchParams(req.query ?? ''), tasks: [],
+  };
+  // Eslatmalar tashqi cron'ni kutmasdan ham ketadi: istalgan so'rovdan keyin, daqiqada bir martadan ko'p emas
+  if (req.defer && Date.now() - remindersCheckedAt > 60_000) {
+    remindersCheckedAt = Date.now();
+    ctx.tasks.push(ready.then(remindersDue).then((due) => (due ? runReminders(ctx) : 0)).catch((e) => console.error('Eslatmalar', e)));
+  }
+  const res = await dispatch(req, ctx);
+  // Ishlar bajarilayotganda yangilari qo'shilishi mumkin (eslatma → bildirishnoma): ro'yxat oxirigacha kutiladi
+  const drain = (async () => { for (let i = 0; i < ctx.tasks.length; i++) await ctx.tasks[i].catch(() => {}); })();
+  if (req.defer) req.defer(drain); else await drain;
+  return res;
+}
+
+async function dispatch(req: ApiRequest, ctx: Ctx): Promise<ApiResponse> {
   try {
     await ready;
     ctx.user = await currentUser(ctx.cookieHeader);
@@ -1340,8 +1731,8 @@ export async function handle(req: ApiRequest): Promise<ApiResponse> {
     }
     return { status: 200, data: (await route[2](ctx)) ?? null, cookie: ctx.cookie, file: ctx.file };
   } catch (err) {
-    if (err instanceof HttpError) return { status: err.status, data: { error: err.message }, cookie: ctx.cookie };
+    if (err instanceof HttpError) return { status: err.status, data: { error: errorText(ctx.lang, err) }, cookie: ctx.cookie };
     console.error(err);
-    return { status: 500, data: { error: 'Serverda xatolik. Birozdan keyin qayta urinib ko‘ring' }, cookie: ctx.cookie };
+    return { status: 500, data: { error: T(ctx.lang, 'Serverda xatolik. Birozdan keyin qayta urinib ko‘ring') }, cookie: ctx.cookie };
   }
 }

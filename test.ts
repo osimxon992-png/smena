@@ -37,7 +37,8 @@ const { handle } = await import('./lib/api.ts');
 
 const jar: Record<string, string> = {};
 async function call(who: string, path: string, body?: object, contentType = 'application/json') {
-  const res = await handle({ method: body ? 'POST' : 'GET', path: '/api' + path, cookie: jar[who] ?? '', contentType, body: body ? JSON.stringify(body) : '', https: false });
+  const [pathname, query = ''] = path.split('?');
+  const res = await handle({ method: body ? 'POST' : 'GET', path: '/api' + pathname, query, cookie: jar[who] ?? '', contentType, body: body ? JSON.stringify(body) : '', https: false });
   if (res.cookie) jar[who] = res.cookie.split(';')[0];
   return res as { status: number; data: any };
 }
@@ -497,6 +498,156 @@ const del = (await call('adm2', `/admin/users/${bizId}/delete`, {})).data;
 assert.ok(del.shifts >= 3, 'biznesning smenalari ham o‘chdi');
 assert.ok(!(await call('guest', '/shifts')).data.some((x: any) => x.org === 'Bahor to‘yxonasi'), 'smenalari ro‘yxatda yo‘q');
 assert.ok(!(await call('adm2', '/admin/overview')).data.users.some((u: any) => u.id === bizId));
+
+// --- Telegram bildirishnomalari, sevimlilar, takroriy smenalar, filtr, "Keldim", eslatmalar va tillar ---
+const tgTo = (chat: number) => tgSent.filter((m) => m.method === 'sendMessage' && m.chat_id === chat);
+const lastTo = (chat: number) => tgTo(chat).at(-1)?.text ?? '';
+const tgReg = async (who: string, body: any) => {
+  const chat = await linkTg(body.phone);
+  const r = await call('kod', '/register/check', body);
+  assert.equal(r.status, 200);
+  assert.equal(await status(who, '/register', { ...body, code: lastCode() }), 200);
+  await fill(who);
+  return chat;
+};
+const bizChat = await tgReg('nb', { role: 'business', phone: '901110001', name: 'Nodir', org: 'Navro‘z restorani', password: 'secret1' });
+const wChat = await tgReg('nw', { role: 'worker', phone: '931110001', name: 'Madina', password: 'secret1' });
+const tomorrow = new Date(Date.now() + 864e5).toLocaleDateString('en-CA', { timeZone: 'Asia/Tashkent' });
+
+// Ariza → biznesga, qabul → ishchiga xabar (biznes raqami bilan)
+const ns = (await call('nb', '/shifts', { ...shift, date: tomorrow, start: '10:00', end: '18:00', title: 'Kassir', pay: 300000, slots: 2 })).data.id;
+assert.equal(await status('nw', `/shifts/${ns}/apply`, {}), 200);
+assert.match(lastTo(bizChat), /Yangi ariza: Madina/, 'biznesga yangi ariza xabari');
+assert.match(lastTo(bizChat), new RegExp(`/ilova/smena/${ns}`), 'xabarda arizalar havolasi');
+let nApp = (await call('nb', `/shifts/${ns}`)).data.applicants[0];
+assert.equal(nApp.badge, 'new', 'hali smena bajarmagan ishchi: yangi');
+assert.equal(nApp.reliability, null);
+assert.equal(await status('nb', `/applications/${nApp.id}`, { action: 'accept' }), 200);
+assert.match(lastTo(wChat), /qabul qilindi/, 'ishchiga qabul xabari');
+assert.match(lastTo(wChat), /\+998 90 111 00 01/, 'xabarda ish beruvchi raqami');
+assert.equal(await status('nw', `/applications/${nApp.id}/checkin`, {}), 409, 'ertangi smenaga bugun “Keldim” bosib bo‘lmaydi');
+assert.equal((await call('nw', '/my/applications')).data.find((a: any) => a.id === nApp.id).can_checkin, false);
+
+// Eslatma tugmasi: begona chat bosa olmaydi; ertangi smenada "Kela olmayman" — bepul bekor qilish
+const cb = (from: number, data: string) => tg({ callback_query: { id: 'q' + data, from: { id: from }, data, message: { chat: { id: from }, message_id: 7 } } });
+await cb(bizChat, `c:${nApp.id}:n`);
+assert.equal((await call('nb', `/shifts/${ns}`)).data.applicants.length, 1, 'begona chat tugmasi hech narsa qilmaydi');
+await cb(wChat, `c:${nApp.id}:n`);
+assert.equal((await call('nb', `/shifts/${ns}`)).data.applicants.length, 0, 'ertangi smena: “Kela olmayman” arizani bekor qiladi');
+assert.match(lastTo(bizChat), /Madina Testov arizasini bekor qildi/);
+
+// Sevimlilar: faqat o'z smenasiga ariza bergan ishchi
+assert.equal(await status('nw', `/shifts/${ns}/apply`, {}), 200, 'bekor qilgandan keyin qayta ariza');
+assert.equal(await status('nb', `/applications/${(await call('nb', `/shifts/${ns}`)).data.applicants[0].id}`, { action: 'accept' }), 200);
+assert.equal(await status('nb', `/favorites/${(await call('w2', '/me')).data.id}`, { on: true }), 404, 'begona ishchini sevimli qilib bo‘lmaydi');
+const nwId = (await call('nw', '/me')).data.id;
+assert.equal(await status('nw', `/favorites/${nwId}`, { on: true }), 403, 'ishchi sevimli qila olmaydi');
+assert.equal((await call('nb', `/favorites/${nwId}`, { on: true })).data.favorite, true);
+const favs = (await call('nb', '/favorites')).data;
+assert.equal(favs.length, 1);
+assert.equal(favs[0].name, 'Madina Testov');
+assert.equal(favs[0].phone, '+998931110001', 'avval qabul qilingan ishchining raqami ko‘rinadi');
+
+// Takroriy smena (har hafta, 3 ta) va sevimlilarga xabar
+const before = tgTo(wChat).length;
+const series = (await call('nb', '/shifts', { ...shift, date: tomorrow, start: '09:00', end: '13:00', title: 'Promouter', pay: 150000, repeat: 'weekly', times: 3, notify: true })).data;
+assert.equal(series.ids.length, 3, 'takroriy: 3 ta smena');
+const seriesDates = (await call('nb', '/my/shifts')).data.filter((x: any) => series.ids.includes(x.id)).map((x: any) => x.date).sort();
+assert.equal(Date.parse(seriesDates[1]) - Date.parse(seriesDates[0]), 7 * 864e5, 'bir haftadan keyin');
+assert.equal(tgTo(wChat).length, before + 1, 'sevimli ishchiga bitta xabar');
+assert.match(lastTo(wChat), /3 ta yangi smena/);
+assert.equal(await status('nb', '/shifts', { ...shift, repeat: 'monthly', times: 2 }), 400, 'noma’lum takror');
+assert.equal(await status('nb', '/shifts', { ...shift, repeat: 'daily', times: 30 }), 400, 'ko‘pi bilan 12 ta');
+
+// Taklif: sevimli ishchiga, bir smenaga bir marta
+assert.equal(await status('nb', `/favorites/${nwId}/invite`, { shift_id: series.ids[1] }), 200);
+assert.match(lastTo(wChat), /taklif qilmoqda/);
+assert.equal(await status('nb', `/favorites/${nwId}/invite`, { shift_id: series.ids[1] }), 409, 'ikki marta taklif yo‘q');
+assert.equal(await status('nb', `/favorites/${nwId}/invite`, { shift_id: 999999 }), 404, 'yo‘q smenaga taklif yo‘q');
+const listed = (await call('nw', '/shifts')).data;
+assert.ok(listed.find((x: any) => x.id === series.ids[1]).invited, 'ro‘yxatda: taklif qilingan');
+assert.ok(listed.find((x: any) => x.id === series.ids[0]).fav, 'ro‘yxatda: meni sevimli qilgan biznes');
+assert.equal(listed.find((x: any) => x.id === series.ids[0]).org_done, 0);
+assert.equal((await call('nb', `/favorites/${nwId}`, { on: false })).data.favorite, false);
+assert.equal((await call('nb', '/favorites')).data.length, 0);
+
+// Filtr va qidiruv
+const ids = (r: any) => r.data.map((x: any) => x.id);
+assert.ok(ids(await call('guest', '/shifts?q=promo')).includes(series.ids[0]), 'qidiruv: lavozim (katta-kichik harf farqsiz)');
+assert.ok(ids(await call('guest', '/shifts?q=Navro')).includes(ns), 'qidiruv: biznes nomi');
+assert.equal((await call('guest', '/shifts?q=yo%27q-narsa-xyz')).data.length, 0);
+assert.ok((await call('guest', '/shifts?q=%25')).data.length === 0, '% qidiruvda oddiy belgi');
+assert.ok((await call('guest', '/shifts?when=tomorrow')).data.every((x: any) => x.date === tomorrow), 'ertangi smenalar');
+assert.ok(!ids(await call('guest', '/shifts?when=week')).includes(series.ids[2]), 'shu hafta: 14 kundan keyingisi yo‘q');
+assert.ok((await call('guest', '/shifts?min_pay=290000')).data.every((x: any) => x.pay >= 290000), 'eng kam haq');
+const byPay = (await call('guest', '/shifts?sort=pay')).data.map((x: any) => x.pay);
+assert.deepEqual(byPay, [...byPay].sort((a, b) => b - a), 'avval qimmati');
+assert.ok((await call('guest', '/shifts?district=Yunusobod')).data.every((x: any) => x.org_district === 'Yunusobod'), 'tuman bo‘yicha');
+assert.ok((await call('nw', '/shifts?mine=1')).data.every((x: any) => x.title === 'Ofitsiant'), 'ko‘nikmalarimga mos (Ofitsiant)');
+
+// Bugungi smena: "Keldim", 3 soat oldin eslatma va smena kuni "Kela olmayman" → biznes ozod qiladi
+const tNow = new Date(Date.now() + 5 * 3600_000);
+const hhmm = (d: Date) => d.toISOString().slice(11, 16);
+if (tNow.getUTCHours() < 22) {
+  const soon = (await call('nb', '/shifts', { ...shift, start: hhmm(new Date(tNow.getTime() + 40 * 60_000)), end: '23:59', title: 'Ofitsiant', slots: 3 })).data.id;
+  const wChat2 = await tgReg('nw2', { role: 'worker', phone: '931110002', name: 'Kamola', password: 'secret1' });
+  for (const who of ['nw', 'nw2']) assert.equal(await status(who, `/shifts/${soon}/apply`, {}), 200);
+  for (const a of (await call('nb', `/shifts/${soon}`)).data.applicants) assert.equal(await status('nb', `/applications/${a.id}`, { action: 'accept' }), 200);
+  const [a1, a2] = (await call('nb', `/shifts/${soon}`)).data.applicants;
+  assert.equal((await call('guest', '/cron/reminders')).data.sent, 2, '3 soat ichidagi smena: ikkalasiga eslatma');
+  assert.equal((await call('guest', '/cron/reminders')).data.skipped, true, 'daqiqada bir martadan ko‘p ishlamaydi');
+  const reminder = tgTo(wChat).at(-1);
+  assert.match(reminder.text, /Eslatma/);
+  assert.equal(reminder.reply_markup.inline_keyboard[0][0].callback_data, `c:${a1.id}:y`, '“Kelaman” tugmasi');
+  assert.equal((await call('adm2', '/cron/reminders')).data.sent, 0, 'eslatma bir marta');
+  await cb(wChat, `c:${a1.id}:y`);
+  assert.match(lastTo(bizChat), /Madina Testov kelishini tasdiqladi/);
+  await cb(wChat, `c:${a1.id}:n`);
+  assert.equal((await call('nb', `/shifts/${soon}`)).data.applicants.find((x: any) => x.id === a1.id).confirm, 'yes', 'javob bir marta');
+  await cb(wChat2, `c:${a2.id}:n`);
+  assert.match(lastTo(bizChat), /Kamola Testov bugun kela olmasligini aytdi/);
+  assert.equal(await status('nb', `/applications/${a1.id}`, { action: 'release' }), 409, 'kelaman deganni ozod qilib bo‘lmaydi');
+  assert.equal(await status('nb', `/applications/${a2.id}`, { action: 'release' }), 200);
+  assert.match(lastTo(wChat2), /ozod qildi/);
+  assert.equal((await call('nw2', '/me')).data.blocked, false, 'ozod qilingan ishchi bloklanmaydi');
+  assert.equal((await call('nb', `/shifts/${soon}`)).data.shift.taken, 1, 'joy bo‘shadi');
+  // "Keldim": smenadan bir soat oldin ochiladi, biznesga xabar, bir marta
+  assert.equal((await call('nw', '/my/applications')).data.find((a: any) => a.id === a1.id).can_checkin, true);
+  assert.equal(await status('nw2', `/applications/${a1.id}/checkin`, {}), 404, 'begona ariza');
+  assert.equal((await call('nw', `/applications/${a1.id}/checkin`, {})).status, 200);
+  assert.match(lastTo(bizChat), /Madina Testov joyiga keldi/);
+  assert.equal(await status('nw', `/applications/${a1.id}/checkin`, {}), 409, 'ikki marta yo‘q');
+  const checked = (await call('nb', `/shifts/${soon}`)).data.applicants.find((x: any) => x.id === a1.id);
+  assert.ok(checked.checkin_at, 'biznes “Keldim” vaqtini ko‘radi');
+  assert.equal((await call('nb', '/my/shifts')).data.find((x: any) => x.id === soon).checked_in, 1);
+  assert.equal(await status('nb', `/applications/${a1.id}`, { action: 'came', rating: 5 }), 200);
+  assert.match(lastTo(wChat), /Smena bajarildi/);
+  const me = (await call('nw', '/me')).data;
+  assert.equal(me.done, 1);
+  assert.equal(me.checkins, 1);
+  assert.equal(me.reliability, 100, 'kelish foizi');
+} else {
+  console.log('(Toshkentda kech: bugungi smena sinovlari o‘tkazib yuborildi)');
+}
+
+// Tillar: xatolar va bot javoblari tanlangan tilda; til foydalanuvchiga saqlanadi
+const asLang = (lang: string, path: string) => handle({ method: 'GET', path: '/api' + path, cookie: `lang=${lang}`, contentType: null, body: '', https: false });
+assert.equal(((await asLang('ru', '/my/applications')).data as any).error, 'Сначала войдите в аккаунт');
+assert.equal(((await asLang('en', '/my/applications')).data as any).error, 'Please sign in first');
+assert.equal(((await asLang('xx', '/my/applications')).data as any).error, 'Avval hisobingizga kiring', 'noma’lum til: o‘zbekcha');
+const enShift = await handle({ method: 'POST', path: '/api/shifts', cookie: `${jar.nb}; lang=en`, contentType: 'application/json', body: JSON.stringify({ ...shift, title: 'x' }), https: false });
+assert.equal((enShift.data as any).error, 'Position: must be 2–80 characters', 'maydon nomi ham tarjima');
+// Til cookie'si sessiya cookie'sini almashtirmasin: jar'ga yozilmaydi
+const setRu = await handle({ method: 'POST', path: '/api/lang', cookie: jar.nb, contentType: 'application/json', body: JSON.stringify({ lang: 'ru' }), https: false });
+assert.equal((setRu.data as any).lang, 'ru');
+assert.match(setRu.cookie ?? '', /^lang=ru;/);
+assert.equal((await handle({ method: 'POST', path: '/api/lang', cookie: '', contentType: 'application/json', body: '{"lang":"de"}', https: false })).status, 400);
+assert.equal((await call('nb', '/me')).data.lang, 'ru', 'til bazada');
+await status('nw', `/shifts/${series.ids[0]}/apply`, {});
+assert.match(lastTo(bizChat), /Новая заявка: Madina/, 'biznesga xabar uning tilida');
+await tg({ message: { chat: { id: 555, type: 'private' }, from: { id: 555, language_code: 'ru' }, text: '/start' } });
+assert.match(tgSent.at(-1).text, /Здравствуйте/, 'bot Telegram tilida javob beradi');
+assert.equal(tgSent.at(-1).reply_markup.keyboard[0][0].text, '📱 Отправить номер');
 
 tgFake.close();
 console.log('Hammasi joyida ✓');

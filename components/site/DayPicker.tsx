@@ -2,10 +2,10 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { som, tashkentDate, type Shift } from '@/lib/client';
+import { tashkentDate, type Shift } from '@/lib/client';
+import { WEEKDAYS } from '@/lib/i18n';
+import { useT } from '@/components/Lang';
 
-const WEEKDAYS = ['Yakshanba', 'Dushanba', 'Seshanba', 'Chorshanba', 'Payshanba', 'Juma', 'Shanba'];
-const label = (i: number, iso: string) => (i === 0 ? 'Bugun' : i === 1 ? 'Ertaga' : WEEKDAYS[new Date(`${iso}T00:00:00Z`).getUTCDay()]);
 
 // "Ertaga bo'shmisiz?" yonidagi kun tanlagich: tanlangan kundagi jonli ochiq smenalarni ko'rsatadi
 export default function DayPicker() {
@@ -13,6 +13,12 @@ export default function DayPicker() {
   const [days, setDays] = useState<string[]>([]);
   const [shifts, setShifts] = useState<Shift[] | null>(null);
   const [pick, setPick] = useState(1);
+  const { t, lang, som } = useT();
+  const label = (i: number, iso: string) => {
+    if (i < 2) return t(i === 0 ? 'Bugun' : 'Ertaga');
+    const w = WEEKDAYS[lang][new Date(`${iso}T00:00:00Z`).getUTCDay()];
+    return w[0].toUpperCase() + w.slice(1);
+  };
 
   useEffect(() => {
     setDays(Array.from({ length: 7 }, (_, i) => tashkentDate(i)));
@@ -25,12 +31,12 @@ export default function DayPicker() {
 
   return (
     <div className="daypick sheet taped">
-      <h3>Qaysi kuni bo‘shsiz?</h3>
-      <div className="day-chips" role="group" aria-label="Kunni tanlang">
+      <h3>{t('Qaysi kuni bo‘shsiz?')}</h3>
+      <div className="day-chips" role="group" aria-label={t('Kunni tanlang')}>
         {days.map((iso, i) => (
           <button key={iso} type="button" className={`day-chip${shifts && !onDay(iso).length ? ' is-empty' : ''}`} aria-pressed={i === pick} onClick={() => setPick(i)}>
             <span>{label(i, iso)}</span>
-            <small>{shifts ? `${onDay(iso).length} ta smena` : '…'}</small>
+            <small>{shifts ? t('{n} ta smena', { n: onDay(iso).length }) : '…'}</small>
           </button>
         ))}
       </div>
@@ -42,10 +48,10 @@ export default function DayPicker() {
             <strong className="day-row-pay">{som(s.pay)}</strong>
           </Link>
         )) : (
-          <p className="day-empty">{shifts ? 'Bu kunga hali ochiq smena yo‘q. Boshqa kunni tanlang yoki keyinroq qayting.' : 'Smenalar yuklanmoqda…'}</p>
+          <p className="day-empty">{shifts ? t('Bu kunga hali ochiq smena yo‘q. Boshqa kunni tanlang yoki keyinroq qayting.') : t('Smenalar yuklanmoqda…')}</p>
         )}
       </div>
-      {list.length > 3 && <Link className="more-go" href="/ilova/smenalar">Yana {list.length - 3} ta smena</Link>}
+      {list.length > 3 && <Link className="more-go" href="/ilova/smenalar">{t('Yana {n} ta smena', { n: list.length - 3 })}</Link>}
     </div>
   );
 }

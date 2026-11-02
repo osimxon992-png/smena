@@ -745,3 +745,50 @@ button.stat:hover { transform: translateY(-2px); }
 .plan-control p { margin: 0; }
 .plan-control select { min-height: 36px; padding: 4px 10px; border: 2px solid var(--ink); border-radius: var(--cut); background: #FFFDF7; font: 600 .92rem var(--body); }
 .show-pass { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; }
+
+/* --- Til tanlagich (UZ / RU / EN) --- */
+.lang-switch { display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--cut); box-shadow: inset 0 0 0 2px var(--ink); }
+.lang-switch button { min-width: 36px; min-height: 30px; padding: 0 7px; border: 0; border-radius: 4px; background: none; color: var(--ink); font: 700 .8rem/1 var(--body); letter-spacing: .04em; cursor: pointer; }
+.lang-switch button:hover { background: rgba(24, 22, 15, .08); }
+.lang-switch button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.lang-switch button:disabled { cursor: wait; }
+
+/* --- Smenalar filtri --- */
+.filters { display: grid; gap: 14px; margin-bottom: 22px; padding: clamp(16px, 2.4vw, 24px); background: var(--paper); box-shadow: 0 18px 30px -22px rgba(50, 28, 6, .55); }
+.filters .search-input { width: 100%; }
+.filters-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.filters-row select { width: 100%; min-height: 46px; padding: 8px 12px; border: 2px solid var(--ink); border-radius: var(--cut); background: #FFFDF7; color: var(--ink); font: 500 .95rem var(--body); cursor: pointer; }
+.filters-row select:disabled { opacity: .5; cursor: not-allowed; }
+.filters-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; font-size: .95rem; }
+.filters-foot .link { margin-left: auto; padding: 4px 8px; text-decoration: underline; }
+.check { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; }
+.check input { width: 20px; height: 20px; accent-color: var(--ink); }
+
+/* --- Ishonch ko'rsatkichlari, belgilar va bayroqchalar --- */
+.trust { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 2px 0 6px; font-size: .92rem; }
+.badge { display: inline-block; padding: 2px 9px; border-radius: 4px; font: 700 .8rem/1.4 var(--body); letter-spacing: .02em; }
+.badge-new { background: var(--paper-shade); color: var(--ink-soft); }
+.badge-reliable { background: var(--teal); color: var(--paper); }
+.badge-top { background: var(--ink); color: var(--kraft-light); }
+.ticket-flags { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; }
+.flag { padding: 2px 9px; border-radius: 4px; font: 700 .82rem/1.4 var(--body); }
+.flag-invite { background: var(--red); color: var(--paper); }
+.flag-fav { background: var(--kraft-light); color: var(--kraft-dark); }
+
+/* --- Arizachi kartochkasi: sevimli tugmasi, "Keldim" holati --- */
+.person-side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.fav-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border: 0; border-radius: var(--cut); background: none; color: var(--ink); box-shadow: inset 0 0 0 2px var(--ink); font: 600 .88rem/1 var(--body); cursor: pointer; }
+.fav-toggle:hover { background: rgba(24, 22, 15, .07); }
+.fav-toggle.on { background: var(--ink); color: var(--kraft-light); }
+.banner.ok { background: var(--teal); color: var(--paper); box-shadow: none; }
+.banner.warn { display: grid; gap: 10px; background: #FBE7C6; box-shadow: inset 0 0 0 2px var(--kraft-deep); }
+.banner.warn p { margin: 0; }
+.btn-checkin { background: var(--teal); }
+.btn-checkin:hover { background: var(--teal-deep); }
+.invite { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.invite select { flex: 1 1 220px; min-height: 48px; padding: 8px 12px; border: 2px solid var(--ink); border-radius: var(--cut); background: #FFFDF7; color: var(--ink); font: 500 .95rem var(--body); }
+
+@media (max-width: 600px) {
+  .person-side { align-items: flex-start; }
+  .filters-foot .link { margin-left: 0; }
+}

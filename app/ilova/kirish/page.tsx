@@ -9,6 +9,7 @@ import { GoogleButton, GoogleSignupForm, type GoogleSignup } from '@/components/
 import { Field, PhoneInput, useSubmit } from '@/components/app/parts';
 import { BotHint, CodeForm, ErrorText, useCodeStep } from '@/components/app/sms';
 import { api, type Me } from '@/lib/client';
+import { useT } from '@/components/Lang';
 
 const MODES = [['code', 'Telegram kod bilan'], ['password', 'Parol bilan']] as const;
 
@@ -20,6 +21,7 @@ export default function Login() {
   // Ikki yo'l: Telegram botga kelgan kod yoki parol
   const [mode, setMode] = useState<'code' | 'password'>('code');
   const sms = useCodeStep();
+  const { t } = useT();
   useEffect(() => { if (ready && me) router.replace(home(me)); }, [ready, me, router]);
   const enter = (user: Me) => { setMe(user); router.push(home(user)); };
   const { onSubmit, error, busy } = useSubmit(async (body) => {
@@ -37,20 +39,20 @@ export default function Login() {
           <>
             {sms.step && <CodeForm step={sms.step} onBack={sms.cancel} />}
             <div hidden={!!sms.step}>
-              <h1>Kirish</h1>
+              <h1>{t('Kirish')}</h1>
               <form className="form narrow" onSubmit={onSubmit}>
                 <GoogleButton onSignup={setSignup} />
-                <div className="pick-row" role="group" aria-label="Kirish usuli">
+                <div className="pick-row" role="group" aria-label={t('Kirish usuli')}>
                   {MODES.map(([m, label]) => (
-                    <button key={m} type="button" className="pick" aria-pressed={m === mode} onClick={() => setMode(m)}>{label}</button>
+                    <button key={m} type="button" className="pick" aria-pressed={m === mode} onClick={() => setMode(m)}>{t(label)}</button>
                   ))}
                 </div>
-                <Field label="Telefon raqam"><PhoneInput /></Field>
+                <Field label={t('Telefon raqam')}><PhoneInput /></Field>
                 {mode === 'code' && <BotHint />}
-                {mode === 'password' && <Field label="Parol"><input type="password" name="password" required autoComplete="current-password" /></Field>}
-                <button className="btn btn-lg" type="submit" disabled={busy}>{mode === 'code' ? 'Kod olish' : 'Kirish'}</button>
+                {mode === 'password' && <Field label={t('Parol')}><input type="password" name="password" required autoComplete="current-password" /></Field>}
+                <button className="btn btn-lg" type="submit" disabled={busy}>{mode === 'code' ? t('Kod olish') : t('Kirish')}</button>
                 {error && <ErrorText text={error} />}
-                <p>Hisobingiz yo‘qmi? <Link href="/ilova/royxat">Ro‘yxatdan o‘ting</Link></p>
+                <p>{t('Hisobingiz yo‘qmi?')} <Link href="/ilova/royxat">{t('Ro‘yxatdan o‘ting')}</Link></p>
               </form>
             </div>
           </>

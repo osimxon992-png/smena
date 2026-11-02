@@ -29,7 +29,8 @@ The reliability rule: a worker who is accepted and does not come is blocked from
 
 - Built: registration by phone + password (worker or business), shift posting, public shift list, apply / cancel, accept / reject, mark came (with 1–5 rating) or no-show (auto-block), worker rates business, phone numbers revealed only after acceptance.
 - Pricing (changed by owner, 2026-10-30): the worker pays 15% of their pay per completed shift (e.g. 30 000 of 200 000 so‘m); nothing for no-shows or cancelled shifts. Posting and hiring are free for businesses. Planned: optional monthly subscriptions (Ishchi Pro, Biznes Pro).
-- Not built yet: online payment (Click/Payme), SMS verification, Telegram notifications, admin panel for unblocking.
+- Built (2026-11-02): Telegram notifications and reminders (a day before and 3 hours before, with “I’ll come / I can’t come” buttons), “Keldim” check-in, worker trust stats (attendance %, badges), shift search and filters, recurring shifts and copy, favourite workers with invites, Uzbek / Russian / English interface.
+- Not built yet: online payment (Click/Payme).
 - Stack: Node 22.13+ with no dependencies (node:http + node:sqlite), static HTML/CSS/vanilla JS in `public/`.
 
 ## Brand Commitments

@@ -1,29 +1,61 @@
 'use client';
 
 import { Fragment, useState } from 'react';
-import { day, som, type Shift } from '@/lib/client';
+import { useT } from '@/components/Lang';
+import type { Shift, Trust } from '@/lib/client';
 import { useApp } from './AppShell';
 
 export function Ticket({ s, children }: { s: Shift; children?: React.ReactNode }) {
+  const { t, day, som } = useT();
   return (
     <article className="ticket">
       <div className="ticket-time">
         <span className="ticket-day">{day(s.date)}</span>
         <span className="ticket-clock">{s.start_time}</span>
-        <span className="ticket-until">{s.end_time} gacha</span>
+        <span className="ticket-until">{t('{time} gacha', { time: s.end_time })}</span>
       </div>
       <div className="ticket-body">
+        {(s.invited || s.fav) ? (
+          <p className="ticket-flags">
+            {s.invited ? <span className="flag flag-invite">💌 {t('Sizni taklif qilishdi')}</span> : null}
+            {s.fav ? <span className="flag flag-fav">★ {t('Sizni sevimli ishchi qilgan')}</span> : null}
+          </p>
+        ) : null}
         <h2 className="ticket-title">{s.title}</h2>
-        {s.org && <p className="ticket-org">{s.org}{s.org_rating ? <> <span className="stars">★ {s.org_rating}</span></> : null}</p>}
-        <p className="ticket-place">{s.place}</p>
+        {s.org && (
+          <p className="ticket-org">
+            {s.org}{s.org_rating ? <> <span className="stars">★ {s.org_rating}</span></> : null}
+            {s.org_done ? <> <span className="muted">· {t('{n} ta smena bajarilgan', { n: s.org_done })}</span></> : null}
+          </p>
+        )}
+        <p className="ticket-place">{s.place}{s.org_district ? <span className="muted"> · {s.org_district}</span> : null}</p>
         {s.note && <p className="ticket-note">{s.note}</p>}
         <div className="ticket-foot">
           <strong className="pay">{som(s.pay)}</strong>
-          {s.slots ? <span className="slots">{s.taken}/{s.slots} joy band</span> : null}
+          {s.slots ? <span className="slots">{t('{taken}/{slots} joy band', { taken: s.taken ?? 0, slots: s.slots })}</span> : null}
         </div>
         {children && <div className="ticket-aside">{children}</div>}
       </div>
     </article>
+  );
+}
+
+// Ishchiga ishonch: belgi (yangi / ishonchli / top), kelish foizi, baho, bajargan smenalar va "Keldim" belgilagani
+const BADGES = { new: 'Yangi ishchi', reliable: 'Ishonchli', top: 'Top ishchi' } as const;
+export function TrustLine({ trust }: { trust: Trust }) {
+  const { t } = useT();
+  const parts = [
+    trust.reliability !== null && t('Kelish: {pct}%', { pct: trust.reliability }),
+    trust.rating && `★ ${trust.rating}`,
+    t('{n} ta smena bajargan', { n: trust.done }),
+    trust.noshows ? t('{n} marta kelmagan', { n: trust.noshows }) : null,
+    trust.checkins ? t('{n} marta “Keldim” belgilagan', { n: trust.checkins }) : null,
+  ].filter(Boolean);
+  return (
+    <p className="trust">
+      {trust.badge && <span className={`badge badge-${trust.badge}`}>{t(BADGES[trust.badge])}</span>}
+      <span className="muted">{parts.join(' · ')}</span>
+    </p>
   );
 }
 
@@ -40,22 +72,26 @@ export const PhoneInput = () => (
 );
 
 // Ro'yxatdagi rol, ism va biznes nomi maydonlari (biznes nomi faqat "Menga ishchi kerak" tanlanganda ko'rinadi)
-export const ProfileFields = ({ business, name }: { business: boolean; name?: string }) => (
-  <>
-    <fieldset className="roles">
-      <legend>Siz kimsiz?</legend>
-      <label><input type="radio" name="role" value="worker" defaultChecked={!business} /><span>Ish qidiryapman</span></label>
-      <label><input type="radio" name="role" value="business" defaultChecked={business} /><span>Menga ishchi kerak</span></label>
-    </fieldset>
-    <Field label="Ismingiz"><input name="name" required maxLength={60} autoComplete="name" defaultValue={name} /></Field>
-    <Field label="Biznes nomi" className="org"><input name="org" maxLength={80} placeholder="Bahor to‘yxonasi" /></Field>
-  </>
-);
+export function ProfileFields({ business, name }: { business: boolean; name?: string }) {
+  const { t } = useT();
+  return (
+    <>
+      <fieldset className="roles">
+        <legend>{t('Siz kimsiz?')}</legend>
+        <label><input type="radio" name="role" value="worker" defaultChecked={!business} /><span>{t('Ish qidiryapman')}</span></label>
+        <label><input type="radio" name="role" value="business" defaultChecked={business} /><span>{t('Menga ishchi kerak')}</span></label>
+      </fieldset>
+      <Field label={t('Ismingiz')}><input name="name" required maxLength={60} autoComplete="name" defaultValue={name} /></Field>
+      <Field label={t('Biznes nomi')} className="org"><input name="org" maxLength={80} placeholder={t('Bahor to‘yxonasi')} /></Field>
+    </>
+  );
+}
 
 export function BlockedBanner() {
   const { me } = useApp();
+  const { t } = useT();
   if (!me?.blocked) return null;
-  return <p className="banner danger">Qabul qilingan smenaga kelmaganingiz uchun hisobingiz bloklangan. Yangi smenalarga ariza bera olmaysiz.</p>;
+  return <p className="banner danger">{t('Qabul qilingan smenaga kelmaganingiz uchun hisobingiz bloklangan. Yangi smenalarga ariza bera olmaysiz.')}</p>;
 }
 
 // Bir bosishli amal: bajarilguncha o'chadi, natijani xabar qiladi
@@ -89,6 +125,7 @@ export function useSubmit(handler: (body: Record<string, string>, form: FormData
 }
 
 export function StarsForm({ id, legend, button, onRate }: { id: string; legend: string; button: string; onRate: (rating: number) => Promise<unknown> }) {
+  const { t } = useT();
   const { onSubmit, error, busy } = useSubmit((b) => onRate(Number(b.rating)));
   return (
     <form className="rate" onSubmit={onSubmit}>
@@ -99,7 +136,7 @@ export function StarsForm({ id, legend, button, onRate }: { id: string; legend: 
           {[5, 4, 3, 2, 1].map((n) => (
             <Fragment key={n}>
               <input type="radio" name="rating" value={n} id={`r${id}-${n}`} required />
-              <label htmlFor={`r${id}-${n}`}><span aria-hidden="true">★</span><span className="sr">{n} baho</span></label>
+              <label htmlFor={`r${id}-${n}`}><span aria-hidden="true">★</span><span className="sr">{t('{n} baho', { n })}</span></label>
             </Fragment>
           ))}
         </div>

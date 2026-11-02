@@ -1,3 +1,4 @@
+import { after } from 'next/server';
 import { handle } from '../../../lib/api';
 
 export const runtime = 'nodejs';
@@ -11,6 +12,7 @@ async function respond(req: Request) {
   const res = await handle({
     method: req.method,
     path: url.pathname,
+    query: url.search,
     cookie: req.headers.get('cookie'),
     contentType: req.headers.get('content-type'),
     body: req.method === 'POST' ? await req.text() : '',
@@ -20,6 +22,8 @@ async function respond(req: Request) {
     // Telegram webhook'ni tekshirish uchun; origin — bot ulanadigan sayt manzili
     tgSecret: req.headers.get('x-telegram-bot-api-secret-token'),
     origin: `${req.headers.get('x-forwarded-proto') || url.protocol.replace(':', '')}://${req.headers.get('x-forwarded-host') || url.host}`,
+    // Telegram bildirishnomalari javobni kutdirmaydi: javob ketgandan keyin yuboriladi
+    defer: (work) => after(() => work),
   });
   // Rasm: manzilda versiya (?v=) bor, shuning uchun brauzer uni uzoq saqlay oladi; faqat shu foydalanuvchining brauzerida (private)
   if (res.file) {

@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { api, day, som, type Me, type Shift } from '@/lib/client';
+import { useT } from '@/components/Lang';
+import { api, type Me, type Shift } from '@/lib/client';
 
 // Farbo — ovozli AI yordamchi. Uch yo'l bilan so'raladi: yozib, mikrofon tugmasi bilan gapirib,
 // yoki "Farbo deb chaqirish" yoqilgan bo'lsa "Salom Farbo, bugungi ishlarni ayt" deb. Javob ovoz bilan o'qiladi.
@@ -61,12 +62,13 @@ type SpeechRec = {
 
 function ShiftCard({ s, me }: { s: Shift; me: Me | null }) {
   const [state, setState] = useState<{ busy: boolean; done: string; error: string }>({ busy: false, done: '', error: '' });
+  const { t, day, som } = useT();
   const left = (s.slots ?? 0) - (s.taken ?? 0);
   async function apply() {
     setState({ busy: true, done: '', error: '' });
     try {
       await api(`/shifts/${s.id}/apply`, {});
-      setState({ busy: false, done: 'Ariza yuborildi', error: '' });
+      setState({ busy: false, done: t('Ariza yuborildi'), error: '' });
     } catch (e) {
       setState({ busy: false, done: '', error: (e as Error).message });
     }
@@ -75,13 +77,13 @@ function ShiftCard({ s, me }: { s: Shift; me: Me | null }) {
     <div className="farbo-shift">
       <p><b>{s.title}</b> · {s.org}</p>
       <p className="farbo-when">{day(s.date)}, {s.start_time}–{s.end_time}</p>
-      <p className="farbo-pay">{som(s.pay)} <span>{left > 0 ? `${left} joy` : 'joy yo‘q'}</span></p>
-      {s.demo ? <p className="farbo-ok">Demo smena: ariza qabul qilinmaydi</p>
-        : !me ? <Link className="btn btn-line" href="/ilova/kirish">Ariza uchun kiring</Link>
+      <p className="farbo-pay">{som(s.pay)} <span>{left > 0 ? t('{n} joy', { n: left }) : t('joy yo‘q')}</span></p>
+      {s.demo ? <p className="farbo-ok">{t('Demo smena: ariza qabul qilinmaydi')}</p>
+        : !me ? <Link className="btn btn-line" href="/ilova/kirish">{t('Ariza uchun kiring')}</Link>
         : me.role === 'worker' && !s.my_status && !state.done && left > 0
-          ? <button type="button" className="btn" disabled={state.busy} onClick={apply}>Ariza berish</button>
+          ? <button type="button" className="btn" disabled={state.busy} onClick={apply}>{t('Ariza berish')}</button>
           : null}
-      {(state.done || s.my_status) && <p className="farbo-ok">{state.done || 'Ariza berilgan'}</p>}
+      {(state.done || s.my_status) && <p className="farbo-ok">{state.done || t('Ariza berilgan')}</p>}
       {state.error && <p className="form-error">{state.error}</p>}
     </div>
   );
@@ -90,6 +92,7 @@ function ShiftCard({ s, me }: { s: Shift; me: Me | null }) {
 // admin berilsa — admin paneli rejimi: butun platforma bo'yicha savollar (/api/admin/ai), limitsiz
 export default function Farbo({ admin }: { admin?: { onOpen: (target: { kind: Ref['kind']; id: number }) => void } }) {
   const [open, setOpen] = useState(false);
+  const { t, lang } = useT();
   const [me, setMe] = useState<Me | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
@@ -142,7 +145,7 @@ export default function Farbo({ admin }: { admin?: { onOpen: (target: { kind: Re
     } catch {
       // Brauzer ovozi faqat o'zbekcha ovoz o'rnatilgan bo'lsa (masalan Edge'dagi Madina/Sardor).
       // Aks holda u o'zbekcha matnni inglizcha talaffuz bilan o'qiydi: undan ko'ra jim turgan yaxshi
-      const voice = 'speechSynthesis' in window ? speechSynthesis.getVoices().find((v) => v.lang.toLowerCase().startsWith('uz')) : undefined;
+      const voice = 'speechSynthesis' in window ? speechSynthesis.getVoices().find((v) => v.lang.toLowerCase().startsWith(lang)) : undefined;
       if (voice) {
         const u = new SpeechSynthesisUtterance(text);
         u.voice = voice;
@@ -150,7 +153,7 @@ export default function Farbo({ admin }: { admin?: { onOpen: (target: { kind: Re
         u.onend = done;
         speechSynthesis.speak(u);
       } else {
-        setNote('Ovoz hozir mavjud emas (limit tugagan bo‘lishi mumkin). Javob yozuvda turibdi');
+        setNote(t('Ovoz hozir mavjud emas (limit tugagan bo‘lishi mumkin). Javob yozuvda turibdi'));
         done();
       }
     }
@@ -166,7 +169,7 @@ export default function Farbo({ admin }: { admin?: { onOpen: (target: { kind: Re
       const a = await api<Answer>(admin ? '/admin/ai' : '/ai', { ...payload, history });
       setMsgs((m) => {
         const next = [...m];
-        if (payload.audio) next[next.length - 1] = { role: 'user', text: a.heard ? `🎤 ${a.heard}` : '🎤 (ovozli xabar)' };
+        if (payload.audio) next[next.length - 1] = { role: 'user', text: a.heard ? `🎤 ${a.heard}` : `🎤 (${t('ovozli xabar')})` };
         return [...next, { role: 'model', text: a.reply, speech: a.speech, shifts: a.shifts, link: a.link, refs: a.refs }];
       });
       setLeft(a.left ?? null);
@@ -185,7 +188,7 @@ export default function Farbo({ admin }: { admin?: { onOpen: (target: { kind: Re
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
-      return setNote('Mikrofonga ruxsat bering: manzil qatoridagi qulf belgisi orqali');
+      return setNote(t('Mikrofonga ruxsat bering: manzil qatoridagi qulf belgisi orqali'));
     }
     player.current?.pause();
     const r = new MediaRecorder(stream);
@@ -199,8 +202,8 @@ export default function Farbo({ admin }: { admin?: { onOpen: (target: { kind: Re
       recorder.current = null;
       setRec(0);
       const blob = new Blob(chunks, { type: r.mimeType });
-      if (blob.size < 2000) return setNote('Ovoz eshitilmadi. Tugmani bosib, gapirib, yana bosing');
-      try { await ask({ audio: await toWav(blob) }); } catch { setNote('Ovozni o‘qib bo‘lmadi. Yozib so‘rang'); }
+      if (blob.size < 2000) return setNote(t('Ovoz eshitilmadi. Tugmani bosib, gapirib, yana bosing'));
+      try { await ask({ audio: await toWav(blob) }); } catch { setNote(t('Ovozni o‘qib bo‘lmadi. Yozib so‘rang')); }
     };
     recorder.current = r;
     r.start();
@@ -212,7 +215,7 @@ export default function Farbo({ admin }: { admin?: { onOpen: (target: { kind: Re
     const SR = recognition();
     if (!SR || speaking.current) return;
     const r = new SR();
-    r.lang = 'uz-UZ';
+    r.lang = { uz: 'uz-UZ', ru: 'ru-RU', en: 'en-US' }[lang];
     r.continuous = true;
     r.interimResults = false;
     r.onresult = (e) => {
@@ -224,13 +227,13 @@ export default function Farbo({ admin }: { admin?: { onOpen: (target: { kind: Re
       if (rest.length > 2) return void ask({ text: rest });
       armed.current = Date.now() + 8000;
       setOpen(true);
-      setNote('Eshitaman…');
+      setNote(t('Eshitaman…'));
     };
     r.onerror = (e) => {
       if (['not-allowed', 'service-not-allowed', 'language-not-supported'].includes(e.error)) {
         wakeRef.current = false;
         setWake(false);
-        setNote(e.error === 'language-not-supported' ? 'Bu brauzer o‘zbek tilini tanimaydi. Mikrofon tugmasidan foydalaning' : 'Mikrofonga ruxsat bering');
+        setNote(e.error === 'language-not-supported' ? t('Bu brauzer bu tilni tanimaydi. Mikrofon tugmasidan foydalaning') : t('Mikrofonga ruxsat bering'));
       }
     };
     // Brauzer tinglashni vaqti-vaqti bilan to'xtatadi: yoqilgan bo'lsa qayta boshlaymiz
@@ -241,7 +244,7 @@ export default function Farbo({ admin }: { admin?: { onOpen: (target: { kind: Re
   function toggleWake(on: boolean) {
     wakeRef.current = on;
     setWake(on);
-    setNote(on ? '“Farbo, …” deb gapiring' : '');
+    setNote(on ? t('“Farbo, …” deb gapiring') : '');
     if (on) startListening();
     else listener.current?.stop();
   }
@@ -258,22 +261,22 @@ export default function Farbo({ admin }: { admin?: { onOpen: (target: { kind: Re
   return (
     <>
       <button type="button" className={`farbo-fab${wake ? ' live' : ''}`} aria-expanded={open} aria-controls="farbo" onClick={() => setOpen((o) => !o)}>
-        <span className="farbo-dot" aria-hidden="true" />Farbo{wake && <span className="farbo-live">tinglayapman</span>}
+        <span className="farbo-dot" aria-hidden="true" />Farbo{wake && <span className="farbo-live">{t('tinglayapman')}</span>}
       </button>
       {open && (
-        <section id="farbo" className="farbo" role="dialog" aria-label="Farbo — ovozli yordamchi">
+        <section id="farbo" className="farbo" role="dialog" aria-label={`Farbo — ${t('ovozli yordamchi')}`}>
           <header className="farbo-head">
-            <p><b>Farbo</b> <span>ovozli yordamchi</span></p>
-            <button type="button" className="link" aria-label="Yopish" onClick={() => setOpen(false)}>✕</button>
+            <p><b>Farbo</b> <span>{t('ovozli yordamchi')}</span></p>
+            <button type="button" className="link" aria-label={t('Yopish')} onClick={() => setOpen(false)}>✕</button>
           </header>
           <div className="farbo-log" ref={log} aria-live="polite">
             {msgs.length === 0 && (
               <div className="farbo-hello">
                 <p>{admin
-                  ? 'Salom! Men Farbo, admin yordamchisi. Platforma holati, foydalanuvchilar, smenalar, arizalar va komissiya haqida so‘rang: yozing yoki mikrofonni bosib gapiring.'
-                  : `Salom${me ? `, ${me.first_name || me.name.split(' ')[0]}` : ''}! Men Farbo. Bugungi smenalar, arizalaringiz yoki qoidalar haqida so‘rang: yozing yoki mikrofonni bosib gapiring.`}</p>
+                  ? t('Salom! Men Farbo, admin yordamchisi. Platforma holati, foydalanuvchilar, smenalar, arizalar va komissiya haqida so‘rang: yozing yoki mikrofonni bosib gapiring.')
+                  : t('Salom{name}! Men Farbo. Bugungi smenalar, arizalaringiz yoki qoidalar haqida so‘rang: yozing yoki mikrofonni bosib gapiring.', { name: me ? `, ${me.first_name || me.name.split(' ')[0]}` : '' })}</p>
                 <div className="farbo-chips">
-                  {chips.map((c) => <button key={c} type="button" disabled={busy} onClick={() => ask({ text: c })}>{c}</button>)}
+                  {chips.map((c) => <button key={c} type="button" disabled={busy} onClick={() => ask({ text: t(c) })}>{t(c)}</button>)}
                 </div>
               </div>
             )}
@@ -281,33 +284,33 @@ export default function Farbo({ admin }: { admin?: { onOpen: (target: { kind: Re
               <div key={i} className={`farbo-msg ${m.role}`}>
                 <p>{m.text}</p>
                 {m.shifts?.map((s) => <ShiftCard key={s.id} s={s} me={me} />)}
-                {m.link && <Link className="farbo-link" href={m.link} onClick={() => setOpen(false)}>{LINKS[m.link] ?? m.link} →</Link>}
+                {m.link && <Link className="farbo-link" href={m.link} onClick={() => setOpen(false)}>{LINKS[m.link] ? t(LINKS[m.link]) : m.link} →</Link>}
                 {m.refs?.map((r) => (
                   <button key={`${r.kind}${r.id}`} type="button" className="farbo-ref" onClick={() => { admin?.onOpen({ kind: r.kind, id: r.id }); setOpen(false); }}>
                     <b>{r.label}</b><span>{r.sub}</span>
                   </button>
                 ))}
-                {m.role === 'model' && <button type="button" className="farbo-replay" aria-label="Qayta eshitish" onClick={() => say(m.speech || m.text)}>🔊</button>}
+                {m.role === 'model' && <button type="button" className="farbo-replay" aria-label={t('Qayta eshitish')} onClick={() => say(m.speech || m.text)}>🔊</button>}
               </div>
             ))}
-            {busy && <p className="farbo-typing">Farbo o‘ylayapti…</p>}
+            {busy && <p className="farbo-typing">{t('Farbo o‘ylayapti…')}</p>}
           </div>
           {note && (
             <p className="farbo-note" role="status">
-              {note}{/Pro obuna/.test(note) && <> <Link href="/ilova/profil#obuna" onClick={() => setOpen(false)}>Obuna haqida →</Link></>}
+              {note}{/Pro|Профиль|Profile/.test(note) && <> <Link href="/ilova/profil#obuna" onClick={() => setOpen(false)}>{t('Obuna haqida')} →</Link></>}
             </p>
           )}
           <form className="farbo-input" onSubmit={(e) => { e.preventDefault(); if (input.trim() && !busy) { ask({ text: input.trim() }); setInput(''); } }}>
-            <input value={input} onChange={(e) => setInput(e.target.value)} placeholder={rec ? `Gapiring… ${rec}/${MAX_SECONDS} s` : 'Savolingizni yozing…'} aria-label="Savol" maxLength={1000} disabled={!!rec} />
-            <button type="button" className={`farbo-mic${rec ? ' on' : ''}`} disabled={busy} onClick={toggleRecording} aria-label={rec ? 'Yozishni to‘xtatish va yuborish' : 'Gapirish'}>
+            <input value={input} onChange={(e) => setInput(e.target.value)} placeholder={rec ? `${t('Gapiring…')} ${rec}/${MAX_SECONDS} s` : t('Savolingizni yozing…')} aria-label={t('Savol')} maxLength={1000} disabled={!!rec} />
+            <button type="button" className={`farbo-mic${rec ? ' on' : ''}`} disabled={busy} onClick={toggleRecording} aria-label={rec ? t('Yozishni to‘xtatish va yuborish') : t('Gapirish')}>
               {rec ? '■' : '🎤'}
             </button>
-            <button type="submit" className="btn" disabled={busy || !input.trim()}>Yuborish</button>
+            <button type="submit" className="btn" disabled={busy || !input.trim()}>{t('Yuborish')}</button>
           </form>
           <div className="farbo-opts">
-            <label><input type="checkbox" checked={speakOn} onChange={(e) => setSpeak(e.target.checked)} /> Javobni ovoz bilan o‘qish</label>
-            {canWake && <label><input type="checkbox" checked={wake} onChange={(e) => toggleWake(e.target.checked)} /> “Farbo” deb chaqirish</label>}
-            {left !== null && <span className="farbo-left">Bugun yana {left} ta savol</span>}
+            <label><input type="checkbox" checked={speakOn} onChange={(e) => setSpeak(e.target.checked)} /> {t('Javobni ovoz bilan o‘qish')}</label>
+            {canWake && <label><input type="checkbox" checked={wake} onChange={(e) => toggleWake(e.target.checked)} /> {t('“Farbo” deb chaqirish')}</label>}
+            {left !== null && <span className="farbo-left">{t('Bugun yana {n} ta savol', { n: left })}</span>}
           </div>
         </section>
       )}

@@ -4,6 +4,7 @@ import HangingTags from '@/components/site/HangingTags';
 import QuickAsk from '@/components/site/QuickAsk';
 import ShiftTypes from '@/components/site/ShiftTypes';
 import Wipe from '@/components/site/Wipe';
+import { getT } from '@/lib/lang-server';
 
 const MORE = [
   ['/qanday-ishlaydi', 'Qanday ishlaydi', 'Arizadan bahogacha to‘rt qadam va ilovani telefonga o‘rnatish.', 'paper'],
@@ -12,17 +13,18 @@ const MORE = [
   ['/savollar', 'Savollar', 'To‘lov, bekor qilish va telefon raqami haqida qisqa javoblar.', 'kraft'],
 ];
 
-export default function Home() {
+export default async function Home() {
+  const { t } = await getT();
   return (
     <>
       <section className="board" aria-labelledby="hero-title">
         <div className="board-top wrap">
-          <h1 id="hero-title" className="hero-title"><span>Bugungi smenalar.</span> <span>Haqi ochiq yozilgan.</span></h1>
+          <h1 id="hero-title" className="hero-title"><span>{t('Bugungi smenalar.')}</span> <span>{t('Haqi ochiq yozilgan.')}</span></h1>
           <div className="note taped">
-            <p>To‘yxona, restoran, ombor va topshirish punktlarida bir kunlik ish. Vaqti, joyi va haqi oldindan yozilgan: tanlaysiz, ariza berasiz, qabul qilinsangiz borasiz.</p>
+            <p>{t('To‘yxona, restoran, ombor va topshirish punktlarida bir kunlik ish. Vaqti, joyi va haqi oldindan yozilgan: tanlaysiz, ariza berasiz, qabul qilinsangiz borasiz.')}</p>
             <div className="actions">
-              <Link className="btn btn-red btn-lg" href="/ilova/smenalar">Barcha smenalar</Link>
-              <Link className="btn btn-line btn-lg" href="/ilova/royxat?rol=biznes">Menga ishchi kerak</Link>
+              <Link className="btn btn-red btn-lg" href="/ilova/smenalar">{t('Barcha smenalar')}</Link>
+              <Link className="btn btn-line btn-lg" href="/ilova/royxat?rol=biznes">{t('Menga ishchi kerak')}</Link>
             </div>
           </div>
         </div>
@@ -33,15 +35,15 @@ export default function Home() {
 
       <section className="section wrap" aria-labelledby="more-title">
         <div className="section-head">
-          <Wipe id="more-title">Batafsil o‘qing</Wipe>
+          <Wipe id="more-title">{t('Batafsil o‘qing')}</Wipe>
           <QuickAsk />
         </div>
         <div className="more-grid">
           {MORE.map(([href, title, text, tone]) => (
             <Link key={href} className={`more-sign stall-${tone}`} href={href}>
-              <h3>{title}</h3>
-              <p>{text}</p>
-              <span className="more-go">Sahifani ochish</span>
+              <h3>{t(title)}</h3>
+              <p>{t(text)}</p>
+              <span className="more-go">{t('Sahifani ochish')}</span>
             </Link>
           ))}
         </div>
@@ -50,11 +52,11 @@ export default function Home() {
       <section className="section final wrap" aria-labelledby="final-title">
         <div className="final-grid">
           <div>
-            <h2 id="final-title" className="final-title">Ertaga bo‘shmisiz?</h2>
-            <p className="lead">Bo‘sh kuningizni tanlang va o‘sha kuni qanday smenalar borligini ko‘ring. Ro‘yxatdan o‘tish ikki daqiqa oladi.</p>
+            <h2 id="final-title" className="final-title">{t('Ertaga bo‘shmisiz?')}</h2>
+            <p className="lead">{t('Bo‘sh kuningizni tanlang va o‘sha kuni qanday smenalar borligini ko‘ring. Ro‘yxatdan o‘tish ikki daqiqa oladi.')}</p>
             <div className="actions">
-              <Link className="btn btn-red btn-lg" href="/ilova/smenalar">Smenalarni ko‘rish</Link>
-              <Link className="btn btn-line btn-lg" href="/ilova/royxat?rol=biznes">Menga ishchi kerak</Link>
+              <Link className="btn btn-red btn-lg" href="/ilova/smenalar">{t('Smenalarni ko‘rish')}</Link>
+              <Link className="btn btn-line btn-lg" href="/ilova/royxat?rol=biznes">{t('Menga ishchi kerak')}</Link>
             </div>
           </div>
           <DayPicker />

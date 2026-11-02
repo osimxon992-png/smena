@@ -7,6 +7,7 @@ import { googleIdToken, preloadFirebase } from '@/lib/firebase';
 import { home, useApp } from './AppShell';
 import { Field, PhoneInput, ProfileFields, useSubmit } from './parts';
 import { BotHint, CodeForm, ErrorText, useCodeStep } from './sms';
+import { useT } from '@/components/Lang';
 
 export type GoogleSignup = { idToken: string; name: string };
 
@@ -25,6 +26,7 @@ export function GoogleButton({ onSignup }: { onSignup: (s: GoogleSignup) => void
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const { t } = useT();
   useEffect(() => { preloadFirebase().catch(() => {}); }, []);
 
   async function click() {
@@ -49,9 +51,9 @@ export function GoogleButton({ onSignup }: { onSignup: (s: GoogleSignup) => void
 
   return (
     <>
-      <button type="button" className="btn btn-line btn-lg btn-google" disabled={busy} onClick={click}><GoogleLogo /> Google orqali kirish</button>
+      <button type="button" className="btn btn-line btn-lg btn-google" disabled={busy} onClick={click}><GoogleLogo /> {t('Google orqali kirish')}</button>
       {error && <p className="form-error" role="alert">{error}</p>}
-      <p className="or">yoki telefon raqam bilan</p>
+      <p className="or">{t('yoki telefon raqam bilan')}</p>
     </>
   );
 }
@@ -61,6 +63,7 @@ export function GoogleSignupForm({ signup, business, onCancel }: { signup: Googl
   const { setMe } = useApp();
   const router = useRouter();
   const sms = useCodeStep();
+  const { t } = useT();
   const { onSubmit, error, busy } = useSubmit(async (body) => {
     const check = () => api<{ phone: string }>('/register/check', { ...body, google: true });
     const { phone } = await check();
@@ -80,15 +83,15 @@ export function GoogleSignupForm({ signup, business, onCancel }: { signup: Googl
       {sms.step && <CodeForm step={sms.step} onBack={sms.cancel} />}
       {/* Kod kutilayotganda forma yashirinadi, lekin yo'qolmaydi: "Raqamni o'zgartirish" bosilsa, kiritilganlar joyida */}
       <div hidden={!!sms.step}>
-        <h1>Ro‘yxatni yakunlash</h1>
+        <h1>{t('Ro‘yxatni yakunlash')}</h1>
         <form className="form narrow" onSubmit={onSubmit}>
-          <p>Google hisobingiz tasdiqlandi. Telefon raqamingiz smenaga qabul qilingandan keyin ikkinchi tomonga ko‘rinadi.</p>
+          <p>{t('Google hisobingiz tasdiqlandi. Telefon raqamingiz smenaga qabul qilingandan keyin ikkinchi tomonga ko‘rinadi.')}</p>
           <ProfileFields business={business} name={signup.name} />
-          <Field label="Telefon raqam"><PhoneInput /></Field>
+          <Field label={t('Telefon raqam')}><PhoneInput /></Field>
           <BotHint />
-          <button className="btn btn-lg" type="submit" disabled={busy}>Kod olish</button>
+          <button className="btn btn-lg" type="submit" disabled={busy}>{t('Kod olish')}</button>
           {error && <ErrorText text={error} />}
-          <button className="btn btn-ghost" type="button" onClick={onCancel}>Orqaga</button>
+          <button className="btn btn-ghost" type="button" onClick={onCancel}>{t('Orqaga')}</button>
         </form>
       </div>
     </>

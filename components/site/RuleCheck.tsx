@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useT } from '@/components/Lang';
 
 type When = 'later' | 'today';
 type Status = 'pending' | 'accepted';
@@ -18,12 +19,13 @@ function verdict(when: When, status: Status, act: Act): { tone: 'ok' | 'bad' | '
 }
 
 function Choice<T extends string>({ q, value, options, onPick }: { q: string; value: T; options: [T, string][]; onPick: (v: T) => void }) {
+  const { t } = useT();
   return (
     <>
-      <p className="widget-q">{q}</p>
-      <div className="pick-row" role="group" aria-label={q}>
+      <p className="widget-q">{t(q)}</p>
+      <div className="pick-row" role="group" aria-label={t(q)}>
         {options.map(([v, label]) => (
-          <button key={v} type="button" className="pick" aria-pressed={v === value} onClick={() => onPick(v)}>{label}</button>
+          <button key={v} type="button" className="pick" aria-pressed={v === value} onClick={() => onPick(v)}>{t(label)}</button>
         ))}
       </div>
     </>
@@ -36,15 +38,16 @@ export default function RuleCheck() {
   const [status, setStatus] = useState<Status>('accepted');
   const [act, setAct] = useState<Act>('cancel');
   const v = verdict(when, status, act);
+  const { t } = useT();
   return (
     <div className="widget sheet taped">
-      <h2 className="widget-title">Qoidani sinab ko‘ring</h2>
+      <h2 className="widget-title">{t('Qoidani sinab ko‘ring')}</h2>
       <Choice q="Smena qachon?" value={when} onPick={setWhen} options={[['later', 'Ertaga yoki keyin'], ['today', 'Bugun']]} />
       <Choice q="Arizangiz holati?" value={status} onPick={setStatus} options={[['pending', 'Kutilmoqda'], ['accepted', 'Qabul qilingan']]} />
       <Choice q="Bora olmaysiz. Nima qilasiz?" value={act} onPick={setAct} options={[['cancel', 'Bekor qilaman'], ['skip', 'Shunchaki bormayman']]} />
       <div className={`verdict ${v.tone}`} key={`${when}${status}${act}`} role="status">
-        <strong>{v.title}</strong>
-        <p>{v.text}</p>
+        <strong>{t(v.title)}</strong>
+        <p>{t(v.text)}</p>
       </div>
     </div>
   );
