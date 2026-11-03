@@ -1,0 +1,16 @@
+# Smenadan oldingi Telegram eslatmalarini har 15 daqiqada ishga tushiradi.
+# Saytga har qanday so'rov ham eslatmalarni tekshiradi; bu cron sayt jim turganda ham ular o'z vaqtida ketishi uchun.
+# Manzil boshqa bo'lsa: Settings → Secrets and variables → Actions → Variables → SITE_URL
+name: Eslatmalar
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: curl -fsS --max-time 60 "${{ vars.SITE_URL || 'https://smena-uzb.vercel.app' }}/api/cron/reminders"
