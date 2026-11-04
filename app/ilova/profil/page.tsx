@@ -1,12 +1,13 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { home, useApp } from '@/components/app/AppShell';
 import Avatar from '@/components/app/Avatar';
 import { Field, TrustLine, useSubmit } from '@/components/app/parts';
 import { useT } from '@/components/Lang';
-import { api, type Me } from '@/lib/client';
+import { api, locate, type Me } from '@/lib/client';
 import { MIN_AGE, ORG_TYPES, PLAN_CONTACT, PLANS, REGIONS, SKILLS, TELEGRAM_BOT, planName } from '@/lib/options';
 
 type T = ReturnType<typeof useT>['t'];
@@ -198,6 +199,69 @@ function TelegramCard() {
   );
 }
 
+// Do'stni taklif qilish: havola orqali ro'yxatdan o'tgan do'st birinchi smenasini bajarsa, 1 hafta Pro sovg'a
+function ReferralCard({ me }: { me: Me }) {
+  const { toast } = useApp();
+  const { t } = useT();
+  const link = `${typeof window === 'undefined' ? '' : location.origin}/ilova/royxat?ref=${me.ref_code}`;
+  const text = me.role === 'worker'
+    ? t('Smena’da bir kunlik ish toping: haqi oldindan yozilgan, tanlov sizda. Shu havola orqali ro‘yxatdan o‘ting:')
+    : t('Smena’da bir kunlik ishchi toping: e’lon qilish bepul. Shu havola orqali ro‘yxatdan o‘ting:');
+  async function share() {
+    try {
+      if (navigator.share) await navigator.share({ title: 'Smena', text, url: link });
+      else { await navigator.clipboard.writeText(link); toast(t('Havola nusxalandi')); }
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') toast(t('Nusxalab bo‘lmadi. Manzil satridan oling'), true);
+    }
+  }
+  return (
+    <section className="sheet ref-card">
+      <h2>🎁 {t('Do‘stni taklif qiling')}</h2>
+      <p>{t('Havolangiz orqali ro‘yxatdan o‘tgan do‘stingiz birinchi smenasini bajarsa, sizga 1 hafta Pro sovg‘a qilinadi.')}</p>
+      <input className="ref-link" readOnly value={link} onFocus={(e) => e.target.select()} aria-label={t('Taklif havolasi')} />
+      <div className="actions">
+        <button type="button" className="btn" onClick={share}>{t('Ulashish')}</button>
+        <a className="btn btn-line" href={`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`} target="_blank" rel="noreferrer">Telegram</a>
+      </div>
+      <p className="hint">{t('Taklif qilganlaringiz: {n} · sovg‘a olingan haftalar: {w}', { n: me.referrals.invited, w: me.referrals.rewarded })}</p>
+    </section>
+  );
+}
+
+// Ishchiga: saqlangan joylashuv bo'lsa, 7 km ichidagi shoshilinch smenalar haqida Telegram'da xabar keladi
+function LocationCard({ me }: { me: Me }) {
+  const { setMe, toast } = useApp();
+  const { t } = useT();
+  const [busy, setBusy] = useState(false);
+  async function save(clear: boolean) {
+    setBusy(true);
+    try {
+      const p = clear ? null : await locate({ denied: t('Joylashuvga ruxsat berilmadi. Brauzer sozlamalarida ruxsat bering'), failed: t('Joylashuvni aniqlab bo‘lmadi. Qayta urinib ko‘ring') });
+      const saved = await api<{ lat: number | null; lng: number | null }>('/me/location', p ?? { clear: true });
+      setMe({ ...me, ...saved });
+      toast(clear ? t('Joylashuv o‘chirildi') : t('Joylashuv saqlandi'));
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="sheet">
+      <h2>🔥 {t('Shoshilinch smenalar')}</h2>
+      <p>{me.lat != null
+        ? t('Joylashuvingiz saqlangan: sizdan 7 km ichidagi shoshilinch smenalar haqida Telegram’da darhol xabar olasiz.')
+        : t('Joylashuvingizni saqlasangiz, sizdan 7 km ichidagi shoshilinch smenalar haqida Telegram’da darhol xabar olasiz. Saqlanmasa — tumaningizdagilari haqida.')}</p>
+      <p className="hint">{t('Xabar kamida bitta smenani bajargan va kelmay qolmagan ishchilarga boradi.')}</p>
+      <div className="actions">
+        <button type="button" className="btn btn-line" disabled={busy} onClick={() => save(false)}>📍 {me.lat != null ? t('Joylashuvni yangilash') : t('Joylashuvimni saqlash')}</button>
+        {me.lat != null && <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => save(true)}>{t('O‘chirish')}</button>}
+      </div>
+    </section>
+  );
+}
+
 function AccountCard({ me }: { me: Me }) {
   const { setMe, toast } = useApp();
   const { t } = useT();
@@ -219,7 +283,13 @@ function AccountCard({ me }: { me: Me }) {
         {me.role === 'worker' && <div><dt>{t('Bajarilgan smenalar')}</dt><dd>{me.done ?? 0}</dd></div>}
         {me.role === 'worker' && me.reliability != null && <div><dt>{t('Kelish foizi')}</dt><dd>{me.reliability}%</dd></div>}
         {me.role === 'business' && <div><dt>{t('Bajarilgan ishlar')}</dt><dd>{me.hired ?? 0}</dd></div>}
+        {me.role === 'business' && me.paid_pct != null && <div><dt>{t('Haqni o‘z vaqtida to‘lash')}</dt><dd>{me.paid_pct}%</dd></div>}
       </dl>
+      <div className="actions">
+        {me.role === 'worker' && <Link className="btn btn-line" href="/ilova/brigada">👥 {t('Brigadam')}</Link>}
+        <Link className="btn btn-line" href="/ilova/daromad">📊 {me.role === 'worker' ? t('Daromadim') : t('Xarajatlar hisoboti')}</Link>
+        {me.role === 'business' && <Link className="btn btn-line" href={`/ilova/tashkilot/${me.id}`}>{t('Sahifam va sharhlar')}</Link>}
+      </div>
       {me.role === 'worker' && (
         <TrustLine trust={{ rating: me.rating, done: me.done ?? 0, noshows: me.noshows ?? 0, checkins: me.checkins ?? 0, reliability: me.reliability ?? null, badge: me.badge ?? null }} />
       )}
@@ -262,6 +332,8 @@ export default function Profile() {
         </div>
         <div className="profile-side">
           <AccountCard me={me} />
+          {me.complete && <ReferralCard me={me} />}
+          {me.role === 'worker' && me.complete && <LocationCard me={me} />}
           <TelegramCard />
           <SubscriptionCard me={me} />
         </div>

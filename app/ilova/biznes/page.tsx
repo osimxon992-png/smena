@@ -19,6 +19,7 @@ export default function MyShifts() {
         <h1>{t('Smenalarim')}</h1>
         <div className="actions">
           <Link className="btn btn-line" href="/ilova/sevimlilar">★ {t('Sevimli ishchilar')}</Link>
+          <Link className="btn btn-line" href="/ilova/daromad">📊 {t('Hisobot')}</Link>
           <Link className="btn" href="/ilova/yangi">{t('Yangi smena')}</Link>
         </div>
       </div>
@@ -26,13 +27,14 @@ export default function MyShifts() {
         <p className="lead">
           {me.rating ? <>{t('Ishchilar bergan baho:')} <span className="stars">★ {me.rating}</span>. </> : null}
           {me.hired ? t('Smenalaringizda {n} marta ish bajarilgan.', { n: me.hired }) : null}
+          {me.paid_pct != null ? <> {t('Haqni o‘z vaqtida to‘lash: {pct}%.', { pct: me.paid_pct })}</> : null}
         </p>
       ) : null}
       {error && <p className="banner danger">{error}</p>}
       {data && (data.length ? (
         <div className="tickets">
           {data.map((s) => (
-            <Ticket key={s.id} s={s}>
+            <Ticket key={s.id} s={{ ...s, business_id: undefined }}>
               {s.date >= today && (s.taken || s.checked_in) ? (
                 <p className="hint">
                   {t('Qabul qilingan: {n}', { n: s.taken ?? 0 })}

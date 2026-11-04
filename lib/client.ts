@@ -10,7 +10,10 @@ export type Shift = {
   org_done?: number; org_district?: string | null; fav?: number; invited?: number;
   // Biznesning o'z ro'yxatida: kelishini tasdiqlaganlar va "Keldim" bosganlar
   confirmed?: number; checked_in?: number;
+  // Xaritadagi joy, shoshilinch belgisi, "Yaqinimdagilar" da masofa (metr), biznes haqni o'z vaqtida to'lash foizi
+  business_id?: number; lat?: number | null; lng?: number | null; urgent?: number; distance?: number | null; org_paid?: number | null;
 };
+export type Point = { lat: number; lng: number };
 // Ishchining ishonch ko'rsatkichlari: kelish foizi (qabul qilingan smenalarning nechtasiga kelgan) va belgi
 export type Trust = {
   rating: number | null; done: number; noshows: number; checkins: number; reliability: number | null; badge: 'new' | 'reliable' | 'top' | null;
@@ -26,7 +29,10 @@ export type Me = {
   lang: 'uz' | 'ru' | 'en';
   // Ishchida: ishonch ko'rsatkichlari; biznesda: smenalarida necha marta ish bajarilgan
   noshows?: number; checkins?: number; reliability?: number | null; badge?: Trust['badge']; hired?: number;
+  // Saqlangan joylashuv, taklif havolasi kodi va taklif qilinganlar, biznesda haqni o'z vaqtida to'lash foizi
+  lat: number | null; lng: number | null; ref_code: string; referrals: { invited: number; rewarded: number }; paid_pct?: number | null;
 };
+export type Review = { rating: number; text: string | null; date: string; org?: string; author?: string; title?: string };
 
 export const STATUS: Record<Status, string> = { pending: 'Kutilmoqda', accepted: 'Qabul qilindi', rejected: 'Rad etildi', came: 'Bajarildi', noshow: 'Kelmadi' };
 const MONTHS = ['yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun', 'iyul', 'avgust', 'sentabr', 'oktabr', 'noyabr', 'dekabr'];
@@ -57,3 +63,30 @@ export async function api<T = any>(path: string, body?: object): Promise<T> {
   if (!res.ok) throw new Error(data?.error || translate(UI, langFromCookie(document.cookie), 'Xatolik yuz berdi'));
   return data;
 }
+
+// Telefon joylashuvi (GPS). Ruxsat berilmasa yoki aniqlanmasa — tushunarli xato
+export function locate(messages: { denied: string; failed: string }) {
+  return new Promise<Point>((resolve, reject) => {
+    if (!('geolocation' in navigator)) return reject(new Error(messages.failed));
+    navigator.geolocation.getCurrentPosition(
+      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      (e) => reject(new Error(e.code === e.PERMISSION_DENIED ? messages.denied : messages.failed)),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 },
+    );
+  });
+}
+
+// Yo'l ko'rsatish: Google Maps (joyi belgilangan bo'lsa koordinata, aks holda manzil matni bilan qidiruv)
+export const directionsUrl = (s: { lat?: number | null; lng?: number | null; place: string }) =>
+  `https://www.google.com/maps/dir/?api=1&destination=${s.lat != null && s.lng != null ? `${s.lat},${s.lng}` : encodeURIComponent(`${s.place}, Toshkent`)}`;
+
+// Masofa: 450 m, 1,2 km
+export const meters = (m: number) => (m < 1000 ? `${m} m` : `${(m / 1000).toFixed(1).replace('.', ',')} km`);
+
+// Taklif havolasidan kelgan kod: ro'yxat yoki Google orqali kirishgacha saqlanadi (sahifalar almashsa ham)
+const REF_KEY = 'smena-ref';
+export function rememberRef() {
+  const ref = new URLSearchParams(location.search).get('ref');
+  try { if (ref && /^[0-9a-z]{1,10}$/.test(ref)) localStorage.setItem(REF_KEY, ref); } catch { /* xotira yopiq */ }
+}
+export const savedRef = () => { try { return localStorage.getItem(REF_KEY) || undefined; } catch { return undefined; } };

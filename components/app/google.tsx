@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { api, type Me } from '@/lib/client';
+import { api, savedRef, type Me } from '@/lib/client';
 import { googleIdToken, preloadFirebase } from '@/lib/firebase';
 import { home, useApp } from './AppShell';
 import { Field, PhoneInput, ProfileFields, useSubmit } from './parts';
@@ -70,7 +70,7 @@ export function GoogleSignupForm({ signup, business, onCancel }: { signup: Googl
     sms.start({
       phone,
       finish: async (code) => {
-        const user = await api<Me>('/google', { ...body, idToken: signup.idToken, code });
+        const user = await api<Me>('/google', { ...body, idToken: signup.idToken, code, ref: savedRef() });
         setMe(user);
         router.push(home(user));
       },

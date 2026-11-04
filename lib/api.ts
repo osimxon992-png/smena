@@ -2,7 +2,7 @@
 // Vercel'da bir nechta nusxa bir vaqtda ishlaydi: "tekshir-keyin-yoz" o'rniga shartli UPDATE/DELETE ishlatiladi.
 import crypto from 'node:crypto';
 import { createClient, type InStatement, type ResultSet } from '@libsql/client';
-import { dayName, fill, isLang, langFromCookie, money, tashkentDate, type Lang, type Vars } from './i18n.ts';
+import { dayName, fill, isLang, langFromCookie, money, monthName, tashkentDate, type Lang, type Vars } from './i18n.ts';
 import { T, tgLang } from './messages.ts';
 import { MIN_AGE, ORG_TYPES, PLAN_CONTACT, PLANS, REGIONS, SKILLS, TELEGRAM_BOT, type Plan } from './options.ts';
 
@@ -109,6 +109,22 @@ const ready = db.executeMultiple(`
   );
   -- Fon ishlarining oxirgi bajarilgan vaqti (eslatmalar)
   CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '');
+  -- Brigada: ishchilar jamoasi. Boshliq butun jamoa nomidan bitta bosishda ariza beradi; a'zo faqat taklifni qabul qilgach (joined = 1) qo'shiladi.
+  -- Ishchi bir vaqtda faqat bitta brigadada bo'ladi (takliflar bir nechta bo'lishi mumkin)
+  CREATE TABLE IF NOT EXISTS brigades (
+    id INTEGER PRIMARY KEY,
+    leader_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS brigade_members (
+    brigade_id INTEGER NOT NULL REFERENCES brigades(id),
+    worker_id INTEGER NOT NULL REFERENCES users(id),
+    joined INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (brigade_id, worker_id)
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS brigade_one_per_worker ON brigade_members (worker_id) WHERE joined = 1;
 `).then(async () => {
   // Keyin qo'shilgan ustunlar: firebase_uid (Google orqali kirganlar) va profil.
   // SQLite'da "ADD COLUMN IF NOT EXISTS" yo'q: ustun bor bo'lsa xatoni o'tkazib yuboramiz
@@ -120,10 +136,18 @@ const ready = db.executeMultiple(`
   for (const table of ['users', 'shifts']) {
     await exec(`ALTER TABLE ${table} ADD COLUMN demo INTEGER NOT NULL DEFAULT 0`).catch((e) => { if (!/duplicate column/i.test(String(e?.message))) throw e; });
   }
-  // Arizalar: nechanchi eslatma yuborilgani (0, 1 — kun oldin, 2 — 3 soat oldin), ishchining javobi (yes/no) va "Keldim" vaqti
-  for (const col of ['reminded INTEGER NOT NULL DEFAULT 0', 'confirm TEXT', 'checkin_at TEXT']) {
-    await exec(`ALTER TABLE applications ADD COLUMN ${col}`).catch((e) => { if (!/duplicate column/i.test(String(e?.message))) throw e; });
-  }
+  // Arizalar: nechanchi eslatma yuborilgani (0, 1 — kun oldin, 2 — 3 soat oldin), ishchining javobi (yes/no), "Keldim" vaqti va
+  // shu paytda smena joyigacha masofa (metr), haq olindimi (yes — o'z vaqtida, late — kechikib, no — hali yo'q), yozma sharhlar va brigada
+  const add = async (table: string, cols: string[]) => {
+    for (const col of cols) await exec(`ALTER TABLE ${table} ADD COLUMN ${col}`).catch((e) => { if (!/duplicate column/i.test(String(e?.message))) throw e; });
+  };
+  await add('applications', ['reminded INTEGER NOT NULL DEFAULT 0', 'confirm TEXT', 'checkin_at TEXT', 'checkin_dist INTEGER',
+    'paid TEXT', 'paid_at TEXT', 'worker_review TEXT', 'business_review TEXT', 'brigade_id INTEGER']);
+  // Smena joyi xaritada va "Shoshilinch" belgisi
+  await add('shifts', ['lat REAL', 'lng REAL', 'urgent INTEGER NOT NULL DEFAULT 0']);
+  // Foydalanuvchi joylashuvi (biznes — oxirgi smena joyi, ishchi — shoshilinch smenalar xabari uchun),
+  // kim taklif qilgani (ref_by) va taklif qilganga Pro hafta berilganmi
+  await add('users', ['lat REAL', 'lng REAL', 'ref_by INTEGER', 'ref_rewarded INTEGER NOT NULL DEFAULT 0']);
 });
 
 // libSQL qatorlari massivga o'xshash obyekt: JSON uchun oddiy {ustun: qiymat} ga aylantiramiz
@@ -162,6 +186,32 @@ const TAKEN = "(SELECT COUNT(*) FROM applications x WHERE x.shift_id = s.id AND 
 const ORG_RATING = '(SELECT ROUND(AVG(x.business_rating), 1) FROM applications x JOIN shifts y ON y.id = x.shift_id WHERE y.business_id = s.business_id)';
 // Biznesga ishonch: uning smenalarida necha marta ish bajarilgan
 const ORG_DONE = "(SELECT COUNT(*) FROM applications x JOIN shifts y ON y.id = x.shift_id WHERE y.business_id = s.business_id AND x.status = 'came')";
+// Haqni o'z vaqtida to'lash foizi: ishchilarning "Haqimni oldim" javoblaridan (javob yo'q bo'lsa null)
+const PAID_PCT = (business: string) => `(SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE x.paid = 'yes') / NULLIF(COUNT(*), 0))
+  FROM applications x JOIN shifts y ON y.id = x.shift_id WHERE y.business_id = ${business} AND x.paid IS NOT NULL)`;
+
+// --- Joylashuv ---
+type Point = { lat: number; lng: number };
+// Ikki nuqta orasidagi masofa, metr
+function distance(a: Point, b: Point) {
+  const rad = Math.PI / 180;
+  const h = Math.sin(((b.lat - a.lat) * rad) / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(((b.lng - a.lng) * rad) / 2) ** 2;
+  return Math.round(2 * 6371e3 * Math.asin(Math.sqrt(h)));
+}
+// Brauzerdan kelgan koordinatalar; ikkalasi ham bo'sh bo'lsa — null
+function point(lat: unknown, lng: unknown): Point | null {
+  if ((lat == null || lat === '') && (lng == null || lng === '')) return null;
+  const p = { lat: Number(lat), lng: Number(lng) };
+  if (!Number.isFinite(p.lat) || !Number.isFinite(p.lng) || Math.abs(p.lat) > 90 || Math.abs(p.lng) > 180) fail(400, 'Joylashuv noto‘g‘ri');
+  return { lat: Math.round(p.lat * 1e6) / 1e6, lng: Math.round(p.lng * 1e6) / 1e6 };
+}
+const inUzbekistan = (p: Point) => p.lat >= 37 && p.lat <= 45.7 && p.lng >= 55.9 && p.lng <= 73.2;
+const meters = (lang: Lang, m: number) => (m < 1000
+  ? `${m} ${lang === 'ru' ? 'м' : 'm'}`
+  : `${(m / 1000).toFixed(1).replace('.', lang === 'en' ? '.' : ',')} ${lang === 'ru' ? 'км' : 'km'}`);
+// "Keldim" shu masofada ishlaydi; shoshilinch smena xabari shu radiusdagi ishchilarga
+const CHECKIN_RADIUS = 300;
+const URGENT_RADIUS = 7000;
 
 // --- Tekshiruvlar (trust boundary) ---
 
@@ -244,12 +294,14 @@ async function needProfile(user: User) {
 }
 
 async function profile(u: Row) {
-  const [stats, photo, usage] = await Promise.all([
+  const [stats, photo, usage, refs] = await Promise.all([
     u.role === 'worker'
       ? one(`SELECT ${WORKER_STATS(Number(u.id))}`).then((r) => trust(r ?? {}))
-      : one("SELECT ROUND(AVG(a.business_rating), 1) rating, COUNT(*) FILTER (WHERE a.status = 'came') hired FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE s.business_id = ?", u.id),
+      : one(`SELECT ROUND(AVG(a.business_rating), 1) rating, COUNT(*) FILTER (WHERE a.status = 'came') hired, ${PAID_PCT('?')} paid_pct
+             FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE s.business_id = ?`, u.id, u.id),
     one('SELECT updated_at FROM photos WHERE user_id = ?', u.id),
     aiUsage(u.id),
+    one('SELECT COUNT(*) invited, COUNT(*) FILTER (WHERE ref_rewarded = 1) rewarded FROM users WHERE ref_by = ?', u.id),
   ]);
   const plan = activePlan(u);
   return {
@@ -262,8 +314,36 @@ async function profile(u: Row) {
     // Obuna: amaldagi tarif, Pro tugash sanasi (null = muddatsiz) va bugungi Farbo foydalanishi
     plan, plan_until: plan === 'pro' ? u.plan_until ?? null : null, ai_used: usage.ai, tts_used: usage.tts,
     lang: isLang(u.lang) ? u.lang : 'uz',
+    // Saqlangan joylashuv (biznesda — oxirgi smena joyi), taklif havolasi kodi va taklif qilinganlar
+    lat: u.lat ?? null, lng: u.lng ?? null,
+    ref_code: refCode(u.id), referrals: { invited: Number(refs?.invited ?? 0), rewarded: Number(refs?.rewarded ?? 0) },
     ...stats,
   };
+}
+
+// Do'stni taklif qilish: havoladagi kod — foydalanuvchi id si (36 lik sanoqda). Taklif qilingan do'st birinchi smenasini
+// bajarganda (ishchi — o'zi kelgan, biznes — uning smenasida ish bajarilgan) taklif qilganga 1 hafta Pro beriladi, bir marta
+const refCode = (id: number) => Number(id).toString(36);
+const REF_DAYS = 7;
+
+async function rewardReferral(ctx: Ctx, userId: number) {
+  const u = await one('SELECT id, first_name, name, ref_by FROM users WHERE id = ? AND ref_by IS NOT NULL AND ref_rewarded = 0', userId);
+  if (!u) return;
+  const { rowsAffected } = await exec('UPDATE users SET ref_rewarded = 1 WHERE id = ? AND ref_rewarded = 0', u.id);
+  const r = rowsAffected && await one('SELECT id, plan, plan_until FROM users WHERE id = ?', u.ref_by);
+  if (!r) return;
+  // Muddatsiz Pro'ga qo'shiladigan narsa yo'q; amaldagi Pro bo'lsa uning oxiridan, aks holda bugundan
+  let until: string | null = null;
+  if (!(r.plan === 'pro' && !r.plan_until)) {
+    const today = now().date;
+    until = addDays(activePlan(r) === 'pro' && r.plan_until > today ? r.plan_until : today, REF_DAYS);
+    await exec("UPDATE users SET plan = 'pro', plan_until = ? WHERE id = ?", until, r.id);
+  }
+  notify(ctx, r.id, (lang) => ({
+    text: T(lang, until
+      ? '🎁 Siz taklif qilgan {name} birinchi smenasini bajardi! Sizga 1 hafta Pro sovg‘a qilindi: {until} gacha.'
+      : '🎁 Siz taklif qilgan {name} birinchi smenasini bajardi! Rahmat — Pro obunangiz muddatsiz.', { name: u.first_name || u.name, until: until && dayName(lang, until, false) }),
+  }));
 }
 
 async function updateProfile({ user, body }: Ctx) {
@@ -302,6 +382,14 @@ async function setPhoto({ user, body }: Ctx) {
     user.id, data,
   );
   return profile(user);
+}
+
+// Saqlangan joylashuv: ishchiga — yaqinidagi shoshilinch smenalar xabari uchun. { clear: true } — o'chirish
+async function setLocation({ user, body }: Ctx) {
+  need(user);
+  const p = body.clear === true ? null : point(body.lat, body.lng) || fail(400, 'Joylashuv noto‘g‘ri');
+  await exec('UPDATE users SET lat = ?, lng = ? WHERE id = ?', p?.lat ?? null, p?.lng ?? null, user.id);
+  return { lat: p?.lat ?? null, lng: p?.lng ?? null };
 }
 
 // Rasmlarni faqat kirganlar (va admin) ko'radi
@@ -370,13 +458,16 @@ async function createUser(ctx: Ctx, firebaseUid: string | null = null, photoUrl 
   const fit = (x: string) => (x.length >= 2 && x.length <= 30 ? x : null);
   if (await one('SELECT 1 FROM users WHERE phone = ?', f.phone)) fail(409, PHONE_TAKEN);
   await verifyCode(f.phone, ctx.body.code);
+  // Taklif havolasidan kelgan bo'lsa (?ref=kod): kod mavjud foydalanuvchiga tegishli bo'lsagina yoziladi
+  const refId = typeof ctx.body.ref === 'string' && /^[0-9a-z]{1,10}$/.test(ctx.body.ref) ? parseInt(ctx.body.ref, 36) : 0;
+  const refBy = refId && (await one('SELECT id FROM users WHERE id = ? AND demo = 0', refId))?.id || null;
   try {
     // Google hisobida parol yo'q: tasodifiy parol xeshi telefon+parol bilan kirishni yopiq tutadi.
     // Til — ro'yxatdan o'tgan paytdagi sayt tili: Telegram xabarlari shu tilda keladi
     const { lastInsertRowid } = await exec(
-      'INSERT INTO users (role, phone, name, org, pass, firebase_uid, first_name, last_name, lang) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO users (role, phone, name, org, pass, firebase_uid, first_name, last_name, lang, ref_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       f.role, f.phone, f.name, f.org, hash(firebaseUid ? crypto.randomBytes(32).toString('hex') : f.password), firebaseUid,
-      fit(first), fit(rest.join(' ')), ctx.lang,
+      fit(first), fit(rest.join(' ')), ctx.lang, refBy,
     );
     if (photoUrl) await importGooglePhoto(Number(lastInsertRowid), photoUrl);
     return startSession(ctx, Number(lastInsertRowid));
@@ -543,6 +634,39 @@ async function verifyCode(p: string, code: unknown) {
 
 const contactKeyboard = (lang: Lang) => ({ keyboard: [[{ text: T(lang, '📱 Raqamni yuborish'), request_contact: true }]], resize_keyboard: true, one_time_keyboard: true });
 
+// --- Telegram Mini App: Smena bot ichida ochiladi ---
+// Telegram faqat https manzilni ochadi: lokal (http) so'rovda jonli sayt manzili olinadi.
+// To'g'ridan-to'g'ri smenalar sahifasi: yo'naltirishda Telegram ma'lumoti (#tgWebAppData) yo'qolmasin
+const webAppUrl = (ctx: { origin: string }) => appLink(ctx.origin.startsWith('https://') ? ctx : { origin: '' }, '/ilova/smenalar');
+const openAppKeyboard = (lang: Lang, ctx: { origin: string }) => ({ inline_keyboard: [[{ text: T(lang, '📲 Smena’ni ochish'), web_app: { url: webAppUrl(ctx) } }]] });
+
+// Ilova ochilganda Telegram bergan initData imzosi bot tokeni bilan tekshiriladi:
+// https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+// Telegram foydalanuvchisi → botga bog'langan raqam → hisob: shu bilan parol va kodsiz kiriladi.
+// Raqam bog'lanmagan bo'lsa { linked: false }, hisob yo'q bo'lsa { registered: false, phone } qaytadi
+const TG_APP_TTL = 86400;
+async function telegramApp(ctx: Ctx) {
+  const bad = (): never => fail(401, 'Telegram ma’lumoti tasdiqlanmadi. Smena’ni bot orqali qayta oching');
+  const token = tgToken() || fail(503, 'Telegram bot hali sozlanmagan: serverda TELEGRAM_BOT_TOKEN yo‘q');
+  const data = new URLSearchParams(typeof ctx.body.initData === 'string' ? ctx.body.initData.slice(0, 4096) : '');
+  const hash = data.get('hash') ?? '';
+  data.delete('hash');
+  const check = [...data.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, v]) => `${k}=${v}`).join('\n');
+  const key = crypto.createHmac('sha256', 'WebAppData').update(token).digest();
+  if (!/^[0-9a-f]{64}$/.test(hash) || !sameSecret(hash, crypto.createHmac('sha256', key).update(check).digest('hex'))) bad();
+  const age = Date.now() / 1000 - Number(data.get('auth_date'));
+  if (!(age < TG_APP_TTL && age > -300)) fail(401, 'Telegram sessiyasi eskirgan. Smena’ni bot orqali qayta oching');
+  let tgUser: Row | null = null;
+  try { tgUser = JSON.parse(data.get('user') ?? ''); } catch { /* pastda tekshiriladi */ }
+  if (!Number.isSafeInteger(tgUser?.id)) bad();
+  // Shaxsiy chatda chat id = Telegram foydalanuvchi id si
+  const link = await one('SELECT phone FROM telegram_links WHERE chat_id = ?', tgUser!.id);
+  if (!link) return { linked: false, bot: TELEGRAM_BOT };
+  const u = await one('SELECT id FROM users WHERE phone = ? AND demo = 0', link.phone);
+  if (!u) return { linked: true, registered: false, phone: link.phone };
+  return startSession(ctx, u.id);
+}
+
 // --- Bildirishnomalar ---
 // Xabar foydalanuvchining o'z tilida, raqami botga bog'langan chatga boradi. Javobdan keyin yuboriladi (ctx.tasks):
 // bot bloklangan yoki tarmoq xatosi asosiy amalni (qabul, ariza) to'xtatmaydi
@@ -622,13 +746,37 @@ async function remindersDue() {
 // Tashqi cron (GitHub Actions) yoki admin chaqiradi. Ochiq: faqat vaqti kelgan eslatmalarni yuboradi va daqiqada bir martadan ko'p ishlamaydi
 async function cronReminders(ctx: Ctx) {
   if (!isAdmin(ctx.cookieHeader) && !(await remindersDue())) return { skipped: true };
-  return { sent: await runReminders(ctx) };
+  return { sent: await runReminders(ctx), reports: await monthlyReports(ctx) };
 }
 
 // Eslatmadagi tugma: "Kelaman" — biznesga xabar; "Kela olmayman" — smena ertaga bo'lsa ariza bepul bekor qilinadi,
 // smena kuni bo'lsa biznesga xabar boradi va u ishchini ilovada ozod qiladi (aks holda qoida bo'yicha "kelmadi")
 async function telegramCallback(ctx: Ctx, cq: Row) {
   const answer = (text = '') => telegram('answerCallbackQuery', { callback_query_id: cq.id, text });
+  const done = (text: string) => Promise.all([
+    answer(text),
+    cq.message && telegram('editMessageReplyMarkup', { chat_id: cq.message.chat.id, message_id: cq.message.message_id, reply_markup: { inline_keyboard: [] } }),
+    cq.message && telegram('sendMessage', { chat_id: cq.message.chat.id, text }),
+  ]);
+  // p: — "Haqimni oldim / Hali olmadim", b: — brigadaga taklif. Tugmani faqat raqami shu chatga bog'langan foydalanuvchi bosadi
+  const other = /^([pb]):(\d+):([yn])$/.exec(String(cq.data ?? ''));
+  if (other) {
+    const user = await one('SELECT u.* FROM users u JOIN telegram_links t ON t.phone = u.phone WHERE t.chat_id = ?', cq.from?.id) as User | undefined;
+    const lang: Lang = isLang(user?.lang) ? user.lang : tgLang(cq.from?.language_code);
+    try {
+      if (!user) fail(404, 'Topilmadi');
+      if (other[1] === 'p') {
+        const got = await markPaid({ ...ctx, user, lang }, Number(other[2]), other[3] === 'y');
+        await done(T(lang, got === 'no' ? '⏳ Ish beruvchiga xabar berdik. Haqingizni olgach, “💸 Haqimni oldim” ni bosing.' : '💸 Rahmat! Haqingizni olganingiz belgilandi.'));
+      } else {
+        const joined = await joinBrigade({ ...ctx, user, lang }, Number(other[2]), other[3] === 'y');
+        await done(T(lang, joined ? '👥 Siz “{name}” brigadasiga qo‘shildingiz.' : 'Taklif rad etildi.', { name: joined }));
+      }
+    } catch (e) {
+      await answer(e instanceof HttpError ? errorText(lang, e) : T(lang, 'Xatolik yuz berdi'));
+    }
+    return { ok: true };
+  }
   const m = /^c:(\d+):([yn])$/.exec(String(cq.data ?? ''));
   if (!m) return answer();
   // Tugmani faqat arizaning egasi (raqami shu chatga bog'langan ishchi) bosa oladi
@@ -638,11 +786,6 @@ async function telegramCallback(ctx: Ctx, cq: Row) {
      JOIN shifts s ON s.id = a.shift_id JOIN users b ON b.id = s.business_id
      WHERE a.id = ? AND t.chat_id = ?`, Number(m[1]), cq.from?.id);
   const lang: Lang = isLang(a?.lang) ? a.lang : tgLang(cq.from?.language_code);
-  const done = (text: string) => Promise.all([
-    answer(text),
-    cq.message && telegram('editMessageReplyMarkup', { chat_id: cq.message.chat.id, message_id: cq.message.message_id, reply_markup: { inline_keyboard: [] } }),
-    cq.message && telegram('sendMessage', { chat_id: cq.message.chat.id, text }),
-  ]);
   if (!a || a.status !== 'accepted' || a.confirm || shiftSpan(a).start <= Date.now()) {
     await answer(T(lang, 'Bu smena uchun javob berilgan'));
     return { ok: true };
@@ -699,11 +842,22 @@ async function telegramWebhook(ctx: Ctx) {
       text: T(lang, '✅ Raqamingiz bog‘landi: {phone}\n\nEndi saytga qaytib, aynan shu raqamni kiriting va kod so‘rang — kod shu chatga keladi. Smenalar haqidagi xabarlar ham shu yerga keladi.', { phone: prettyPhone(`+${digits}`) }),
       reply_markup: { remove_keyboard: true },
     });
+    await telegram('sendMessage', { chat_id: chat, text: T(lang, 'Smena’ni shu yerning o‘zida ham ochishingiz mumkin: hisobingizga parolsiz kirasiz.'), reply_markup: openAppKeyboard(lang, ctx) });
     return { ok: true };
   }
   // Raqamni qo'lda yozib yuborganlar: Telegram tasdiqlamagan raqamni qabul qilmaymiz, tugmani ko'rsatamiz
   if (typeof msg.text === 'string' && /^\+?[\d\s()-]{9,}$/.test(msg.text.trim())) {
     await reply('Raqamni yozish shart emas: pastdagi “📱 Raqamni yuborish” tugmasini bosing — Telegram raqamingizni o‘zi yuboradi.', { reply_markup: contactKeyboard(lang) });
+    return { ok: true };
+  }
+  // Raqami bog'langanga: Smena'ni Telegram ichida ochish tugmasi
+  const linked = await one('SELECT phone FROM telegram_links WHERE chat_id = ?', chat);
+  if (linked) {
+    await telegram('sendMessage', {
+      chat_id: chat,
+      text: T(lang, 'Assalomu alaykum! Raqamingiz bog‘langan: {phone} ✅\n\nSmena’ni shu yerning o‘zida oching: hisobingizga parolsiz kirasiz. Kodlar, eslatmalar va xabarlar ham shu chatga keladi.', { phone: prettyPhone(linked.phone) }),
+      reply_markup: openAppKeyboard(lang, ctx),
+    });
     return { ok: true };
   }
   await reply(
@@ -790,16 +944,25 @@ async function listShifts({ user, query }: Ctx) {
     where.push(skills.length ? `s.title IN (${skills.map(() => '?').join(', ')})` : '0');
     args.push(...skills);
   }
+  if (Number(query.get('org')) > 0) { where.push('s.business_id = ?'); args.push(Number(query.get('org'))); }
+  if (query.get('urgent') === '1') where.push('s.urgent = 1');
   const me = user?.id ?? 0;
-  return all(
-    `SELECT s.*, u.org, u.region org_region, u.district org_district, ${ORG_RATING} org_rating, ${ORG_DONE} org_done, ${TAKEN} taken,
+  const rows = await all(
+    `SELECT s.*, u.org, u.region org_region, u.district org_district, ${ORG_RATING} org_rating, ${ORG_DONE} org_done, ${PAID_PCT('s.business_id')} org_paid, ${TAKEN} taken,
        (SELECT status FROM applications x WHERE x.shift_id = s.id AND x.worker_id = ?) my_status,
        EXISTS (SELECT 1 FROM favorites f WHERE f.business_id = s.business_id AND f.worker_id = ?) fav,
        EXISTS (SELECT 1 FROM invites i WHERE i.shift_id = s.id AND i.worker_id = ?) invited
      FROM shifts s JOIN users u ON u.id = s.business_id
-     WHERE ${where.join(' AND ')} ORDER BY ${query.get('sort') === 'pay' ? 's.pay DESC, s.date, s.start_time' : 's.date, s.start_time'} LIMIT 200`,
+     WHERE ${where.join(' AND ')}
+     ORDER BY s.urgent DESC, ${query.get('sort') === 'pay' ? 's.pay DESC, s.date, s.start_time' : 's.date, s.start_time'} LIMIT 200`,
     me, me, me, ...args,
   );
+  // near=lat,lng — "Yaqinimdagilar": har smenagacha masofa (metr), eng yaqini birinchi; joyi belgilanmaganlar oxirida
+  const [lat, lng] = (query.get('near') ?? '').split(',');
+  const here = lat && lng ? point(lat, lng) : null;
+  if (!here) return rows;
+  return rows.map((s) => ({ ...s, distance: s.lat == null ? null : distance(here, s as Point) }))
+    .sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity));
 }
 
 // Takroriy smena: repeat — daily (har kuni) yoki weekly (har hafta), times — jami nechta (birinchisi bilan, 2–12).
@@ -821,11 +984,23 @@ async function createShift(ctx: Ctx) {
   };
   const step = !body.repeat || body.repeat === 'none' ? 0 : body.repeat === 'daily' ? 1 : body.repeat === 'weekly' ? 7 : fail(400, 'Takrorlashni tanlang');
   const times = step ? int(body.times, 2, 12, 'Takrorlar soni') : 1;
-  const results = await db.batch(Array.from({ length: times }, (_, i) => ({
-    sql: 'INSERT INTO shifts (business_id, title, place, date, start_time, end_time, pay, slots, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    args: [user.id, s.title, s.place, addDays(d, i * step), s.start_time, s.end_time, s.pay, s.slots, s.note],
-  })), 'write');
-  const ids = results.map((r) => Number(r.lastInsertRowid));
+  // Xaritadagi joy (ixtiyoriy): "Yaqinimdagilar", yo'l ko'rsatish va "Keldim" tekshiruvi uchun
+  const at = point(body.lat, body.lng);
+  if (at && !inUzbekistan(at)) fail(400, 'Xaritada O‘zbekiston ichidagi joyni tanlang');
+  // Shoshilinch: bugun yoki ertaga, bir martalik smena. Ro'yxatda tepada turadi, yaqindagi ishonchli ishchilarga xabar boradi
+  const urgent = body.urgent === true || body.urgent === '1';
+  if (urgent && step) fail(400, 'Shoshilinch smenani takrorlab bo‘lmaydi');
+  if (urgent && d > tashkentDate(1)) fail(400, 'Shoshilinch smena faqat bugun yoki ertaga uchun bo‘ladi');
+  const results = await db.batch([
+    ...Array.from({ length: times }, (_, i) => ({
+      sql: 'INSERT INTO shifts (business_id, title, place, date, start_time, end_time, pay, slots, note, lat, lng, urgent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      args: [user.id, s.title, s.place, addDays(d, i * step), s.start_time, s.end_time, s.pay, s.slots, s.note, at?.lat ?? null, at?.lng ?? null, urgent ? 1 : 0],
+    })),
+    // Keyingi smena formasi shu joydan boshlanadi
+    ...(at ? [{ sql: 'UPDATE users SET lat = ?, lng = ? WHERE id = ?', args: [at.lat, at.lng, user.id] }] : []),
+  ], 'write');
+  const ids = results.slice(0, times).map((r) => Number(r.lastInsertRowid));
+  const alerted = urgent ? await alertNearby(ctx, { ...s, id: ids[0], date: d, org: user.org, lat: at?.lat ?? null, lng: at?.lng ?? null }, user) : 0;
   if (body.notify === true || body.notify === '1') {
     const favs = await all('SELECT f.worker_id FROM favorites f JOIN users w ON w.id = f.worker_id WHERE f.business_id = ? AND w.blocked = 0', user.id);
     for (const f of favs) {
@@ -837,7 +1012,34 @@ async function createShift(ctx: Ctx) {
       }));
     }
   }
-  return { id: ids[0], ids };
+  return { id: ids[0], ids, alerted };
+}
+
+// Shoshilinch smena: yaqindagi ishonchli ishchilarga Telegram xabari (ko'pi bilan 50 kishi).
+// Ishonchli — kamida bitta smena bajargan, hech qachon kelmay qolmagan va bloklanmagan. Yaqin — ishchi joylashuvini saqlagan
+// va smena xaritada belgilangan bo'lsa 7 km ichida, aks holda biznes bilan bir tumanda yashaydi
+async function alertNearby(ctx: Ctx, s: Row, business: User) {
+  const workers = await all(
+    `SELECT u.id, u.lat, u.lng, u.district FROM users u JOIN telegram_links t ON t.phone = u.phone
+     WHERE u.role = 'worker' AND u.blocked = 0 AND u.demo = 0 AND (u.district = ? OR u.lat IS NOT NULL)
+       AND EXISTS (SELECT 1 FROM applications a WHERE a.worker_id = u.id AND a.status = 'came')
+       AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.worker_id = u.id AND a.status = 'noshow')`,
+    business.district,
+  );
+  const near = workers
+    .map((w): Row => ({ ...w, d: w.lat != null && s.lat != null ? distance(w as Point, s as Point) : null }))
+    .filter((w) => (w.d != null ? w.d <= URGENT_RADIUS : w.district === business.district))
+    .sort((a, b) => (a.d ?? URGENT_RADIUS) - (b.d ?? URGENT_RADIUS))
+    .slice(0, 50);
+  for (const w of near) {
+    notify(ctx, w.id, (lang) => ({
+      text: T(lang, w.d != null
+        ? '🔥 Shoshilinch smena, sizdan {dist} uzoqlikda:\n{shift}\n📍 {place}\n💰 {pay}\n\nAriza berish: {link}'
+        : '🔥 Shoshilinch smena tumaningizda:\n{shift}\n📍 {place}\n💰 {pay}\n\nAriza berish: {link}',
+      { dist: w.d != null ? meters(lang, w.d) : '', shift: shiftLine(lang, s), place: s.place, pay: money(lang, s.pay), link: appLink(ctx, '/ilova/smenalar?urgent=1') }),
+    }));
+  }
+  return near.length;
 }
 
 // Ishchining ishonch ko'rsatkichlari (w — ishchi id ustuni yoki soni): o'rtacha baho, bajargan, kelmagan va "Keldim" belgilagan smenalari
@@ -865,19 +1067,29 @@ async function shiftDetail({ user, id }: Ctx) {
   const shift = await one(`SELECT s.*, u.org, ${TAKEN} taken FROM shifts s JOIN users u ON u.id = s.business_id WHERE s.id = ? AND s.business_id = ?`, id, user.id)
     || fail(404, 'Smena topilmadi');
   // Telefon raqam faqat qabul qilingandan keyin ochiladi; profil (rasm, yosh, tuman, ko'nikmalar, ishonch) darhol ko'rinadi
+  // Brigada a'zolari birga turadi (brigade_id, keyin ariza tartibi)
   const applicants = await all(
-    `SELECT a.id, a.status, a.worker_rating, a.confirm, a.checkin_at, u.id worker_id, u.name, u.blocked, u.birth_date, u.gender, u.region, u.district, u.skills, u.about,
+    `SELECT a.id, a.status, a.worker_rating, a.worker_review, a.confirm, a.checkin_at, a.checkin_dist, a.paid, a.brigade_id, b.name brigade_name,
+       u.id worker_id, u.name, u.blocked, u.birth_date, u.gender, u.region, u.district, u.skills, u.about,
        CASE WHEN a.status IN ('accepted', 'came', 'noshow') THEN u.phone END phone,
        (SELECT updated_at FROM photos WHERE user_id = u.id) photo_v,
        EXISTS (SELECT 1 FROM favorites f WHERE f.business_id = ? AND f.worker_id = u.id) favorite,
        ${WORKER_STATS('u.id')}
-     FROM applications a JOIN users u ON u.id = a.worker_id WHERE a.shift_id = ? ORDER BY a.id`,
+     FROM applications a JOIN users u ON u.id = a.worker_id LEFT JOIN brigades b ON b.id = a.brigade_id
+     WHERE a.shift_id = ? ORDER BY COALESCE(a.brigade_id, 0), a.id`,
     user.id, id,
   );
+  // Har ishchi haqida bizneslar yozgan oxirgi 3 ta sharh
+  const ids = applicants.map((a) => a.worker_id);
+  const reviews = ids.length ? await all(
+    `SELECT a.worker_id, a.worker_rating rating, a.worker_review text, s.date, u.org FROM applications a
+     JOIN shifts s ON s.id = a.shift_id JOIN users u ON u.id = s.business_id
+     WHERE a.worker_id IN (${ids.map(() => '?').join(', ')}) AND a.worker_review IS NOT NULL ORDER BY s.date DESC, a.id DESC`, ...ids) : [];
   return {
     shift,
     applicants: applicants.map(({ birth_date, photo_v, skills, ...a }) => ({
       ...a, ...trust(a), favorite: !!a.favorite, age: age(birth_date), skills: parseSkills(skills), photo: photo_v ? photoUrl(a.worker_id, photo_v) : null,
+      reviews: reviews.filter((r) => r.worker_id === a.worker_id).slice(0, 3).map(({ worker_id, ...r }) => r),
     })),
   };
 }
@@ -897,6 +1109,8 @@ function myShifts({ user }: Ctx) {
 
 // --- Arizalar ---
 
+// { brigade: true } — brigada boshlig'i o'zi va brigadaning barcha a'zolari nomidan ariza beradi (a'zolar brigadaga qo'shilganda
+// bunga rozi bo'lgan). Bloklangan, profili to'liq bo'lmagan yoki bu smenaga ariza bergan a'zo qo'shilmaydi (skipped)
 async function apply(ctx: Ctx) {
   const { user, id } = ctx;
   need(user, 'worker');
@@ -906,23 +1120,45 @@ async function apply(ctx: Ctx) {
     || fail(404, 'Smena topilmadi yoki boshlanib bo‘lgan');
   if (s.demo) fail(409, 'Bu demo smena: namuna uchun ko‘rsatilgan, ariza qabul qilinmaydi');
   if (s.taken >= s.slots) fail(409, 'Smenada bo‘sh joy qolmadi');
+  let team: Row[] = [], skipped: string[] = [], brigade: Row | undefined;
+  if (ctx.body.brigade === true) {
+    brigade = await one('SELECT * FROM brigades WHERE leader_id = ?', user.id) || fail(403, 'Brigada nomidan faqat brigada boshlig‘i ariza beradi');
+    const members = await all(
+      `SELECT u.*, EXISTS (SELECT 1 FROM photos p WHERE p.user_id = u.id) has_photo,
+         EXISTS (SELECT 1 FROM applications x WHERE x.shift_id = ? AND x.worker_id = u.id) applied
+       FROM brigade_members m JOIN users u ON u.id = m.worker_id WHERE m.brigade_id = ? AND m.joined = 1 AND u.id != ?`, id, brigade.id, user.id);
+    team = members.filter((m) => !m.blocked && !m.applied && isComplete(m, !!m.has_photo));
+    skipped = members.filter((m) => !team.includes(m)).map((m) => m.name);
+    if (!team.length) fail(409, 'Brigadangizda ariza bera oladigan a’zo yo‘q');
+    if (s.taken + team.length + 1 > s.slots) fail(409, 'Smenada brigadangiz uchun joy yetmaydi: {free} ta bo‘sh joy bor, sizlar {n} kishisiz', { free: s.slots - s.taken, n: team.length + 1 });
+  }
   try {
-    await exec('INSERT INTO applications (shift_id, worker_id) VALUES (?, ?)', id, user.id);
+    await db.batch([user, ...team].map((w) => ({ sql: 'INSERT INTO applications (shift_id, worker_id, brigade_id) VALUES (?, ?, ?)', args: [id, w.id, brigade?.id ?? null] })), 'write');
   } catch (e) {
     if (isUnique(e)) fail(409, 'Bu smenaga ariza bergansiz');
     throw e;
   }
+  for (const m of team) {
+    notify(ctx, m.id, (lang) => ({
+      text: T(lang, '👥 {leader} “{brigade}” brigadasi nomidan smenaga ariza berdi:\n{shift}\n📍 {place}\n💰 {pay}\n\nKela olmasangiz, arizani bekor qiling: {link}',
+        { leader: user.name, brigade: brigade!.name, shift: shiftLine(lang, s), place: s.place, pay: money(lang, s.pay), link: appLink(ctx, '/ilova/arizalarim') }),
+    }));
+  }
   notify(ctx, s.business_id, (lang) => ({
-    text: T(lang, '📝 Yangi ariza: {worker}\n{shift}\n\nArizalarni ko‘rish: {link}', { worker: user.name, shift: shiftLine(lang, s), link: appLink(ctx, `/ilova/smena/${s.id}`) }),
+    text: team.length
+      ? T(lang, '👥 Yangi brigada arizasi: “{brigade}”, {n} kishi (boshlig‘i {worker})\n{shift}\n\nArizalarni ko‘rish: {link}',
+        { brigade: brigade!.name, n: team.length + 1, worker: user.name, shift: shiftLine(lang, s), link: appLink(ctx, `/ilova/smena/${s.id}`) })
+      : T(lang, '📝 Yangi ariza: {worker}\n{shift}\n\nArizalarni ko‘rish: {link}', { worker: user.name, shift: shiftLine(lang, s), link: appLink(ctx, `/ilova/smena/${s.id}`) }),
   }));
-  return { ok: true };
+  return { ok: true, team: team.length + 1, skipped };
 }
 
 // can_checkin: "Keldim" tugmasi hozir ishlaydimi (smena boshlanishidan 1 soat oldindan tugaguncha)
 async function myApplications({ user }: Ctx) {
   need(user, 'worker');
   const rows = await all(
-    `SELECT a.id, a.status, a.business_rating, a.confirm, a.checkin_at, s.id shift_id, s.title, s.place, s.date, s.start_time, s.end_time, s.pay, s.note, u.org,
+    `SELECT a.id, a.status, a.business_rating, a.business_review, a.confirm, a.checkin_at, a.checkin_dist, a.paid, a.brigade_id,
+       s.id shift_id, s.business_id, s.title, s.place, s.date, s.start_time, s.end_time, s.pay, s.note, s.lat, s.lng, s.urgent, u.org,
        CASE WHEN a.status IN ('accepted', 'came', 'noshow') THEN u.phone END phone
      FROM applications a JOIN shifts s ON s.id = a.shift_id JOIN users u ON u.id = s.business_id
      WHERE a.worker_id = ? ORDER BY s.date DESC, s.start_time DESC`,
@@ -947,6 +1183,24 @@ async function decide(ctx: Ctx) {
   const { action } = body;
   const tell = (text: string, vars: (lang: Lang) => Vars = () => ({})) =>
     notify(ctx, a.worker_id, (lang) => ({ text: T(lang, text, { shift: shiftLine(lang, a), ...vars(lang) }) }));
+  if (action === 'accept_team') {
+    // Brigadani butunlay qabul qilish: joy hammasiga yetsa, bitta so'rovda (subso'rovlar bir marta, yangilashdan oldin hisoblanadi)
+    if (!a.brigade_id || a.status !== 'pending') fail(409, 'Bu arizaga javob berilgan');
+    const team = await all("SELECT id, worker_id FROM applications WHERE shift_id = ? AND brigade_id = ? AND status = 'pending'", a.shift_id, a.brigade_id);
+    const { rowsAffected } = await exec(
+      `UPDATE applications SET status = 'accepted' WHERE shift_id = ? AND brigade_id = ? AND status = 'pending'
+         AND (SELECT COUNT(*) FROM applications x WHERE x.shift_id = ? AND x.status IN ('accepted', 'came', 'noshow'))
+           + (SELECT COUNT(*) FROM applications y WHERE y.shift_id = ? AND y.brigade_id = ? AND y.status = 'pending') <= ?`,
+      a.shift_id, a.brigade_id, a.shift_id, a.shift_id, a.brigade_id, a.slots);
+    if (!rowsAffected) fail(409, 'Smenada brigada uchun joy yetmaydi');
+    for (const m of team) {
+      notify(ctx, m.worker_id, (lang) => ({
+        text: T(lang, '✅ Arizangiz qabul qilindi!\n{shift}\n📍 {place}\n💰 {pay}\n☎️ Ish beruvchi: {phone}\n\nSmenadan oldin eslatma yuboramiz. Kela olmasangiz, kamida bir kun oldin bekor qiling, aks holda hisobingiz bloklanadi.',
+          { shift: shiftLine(lang, a), place: a.place, pay: money(lang, a.pay), phone: prettyPhone(a.org_phone) }),
+      }));
+    }
+    return { ok: true, accepted: rowsAffected };
+  }
   if (action === 'accept' || action === 'reject') {
     if (a.status !== 'pending') fail(409, 'Bu arizaga javob berilgan');
     // Joy borligini tekshirish va qabul qilish bitta so'rovda: ikki biznes oynasi bir vaqtda bossa ham joydan oshmaydi
@@ -970,12 +1224,22 @@ async function decide(ctx: Ctx) {
     if (a.status !== 'accepted') fail(409, 'Faqat qabul qilingan ishchini belgilash mumkin');
     if (a.date > now().date) fail(409, 'Kelgan-kelmaganini smena kuni belgilaysiz');
     const rating = action === 'came' ? int(body.rating, 1, 5, 'Baho') : null;
-    const steps: InStatement[] = [{ sql: "UPDATE applications SET status = ?, worker_rating = ? WHERE id = ? AND status = 'accepted'", args: [action, rating, id] }];
+    const steps: InStatement[] = [{
+      sql: "UPDATE applications SET status = ?, worker_rating = ?, worker_review = ? WHERE id = ? AND status = 'accepted'",
+      args: [action, rating, action === 'came' ? review(body.review) : null, id],
+    }];
     if (action === 'noshow') steps.push({ sql: 'UPDATE users SET blocked = 1 WHERE id = ?', args: [a.worker_id] });
     const [marked] = await db.batch(steps, 'write');
     if (!marked.rowsAffected) fail(409, 'Bu ishchi allaqachon belgilangan');
     if (action === 'came') {
-      tell('⭐ Smena bajarildi: {shift}\nSizga qo‘yilgan baho: {rating} / 5\n\nIsh beruvchini ham baholang: {link}', () => ({ rating, link: appLink(ctx, '/ilova/arizalarim') }));
+      // Smena bajarildi: haq olindimi degan tugmalar bilan; taklif qilingan do'st bo'lsa (ishchi yoki biznes), taklif qilganga Pro hafta
+      notify(ctx, a.worker_id, (lang) => ({
+        text: T(lang, '⭐ Smena bajarildi: {shift}\nSizga qo‘yilgan baho: {rating} / 5\n\nIsh beruvchini ham baholang: {link}', { shift: shiftLine(lang, a), rating, link: appLink(ctx, '/ilova/arizalarim') })
+          + '\n\n' + T(lang, 'Haqingizni oldingizmi?'),
+        reply_markup: paidKeyboard(lang, a.id),
+      }));
+      await rewardReferral(ctx, a.worker_id);
+      await rewardReferral(ctx, user.id);
     } else {
       tell('⚠️ Siz {shift} smenasiga kelmadi deb belgilandingiz va hisobingiz bloklandi.\nXato bo‘lsa, yozing: {contact}', () => ({ contact: PLAN_CONTACT.label }));
     }
@@ -993,18 +1257,50 @@ async function decide(ctx: Ctx) {
 async function workerApplication(user: User | undefined, id: number) {
   need(user, 'worker');
   return await one(
-    `SELECT a.*, s.date, s.start_time, s.end_time, s.title, s.business_id, u.org
+    `SELECT a.*, s.date, s.start_time, s.end_time, s.title, s.place, s.pay, s.lat, s.lng, s.business_id, u.org
      FROM applications a JOIN shifts s ON s.id = a.shift_id JOIN users u ON u.id = s.business_id WHERE a.id = ? AND a.worker_id = ?`, id, user.id)
     || fail(404, 'Ariza topilmadi');
 }
 
+// Bahoga qo'shimcha yozma sharh (ixtiyoriy, 300 belgigacha); bo'sh bo'lsa null
+const review = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().replace(/\s+/g, ' ').slice(0, 300) : null);
+
 async function rate({ user, id, body }: Ctx) {
   await workerApplication(user, id);
   const rating = int(body.rating, 1, 5, 'Baho');
-  const { rowsAffected } = await exec("UPDATE applications SET business_rating = ? WHERE id = ? AND status = 'came' AND business_rating IS NULL", rating, id);
+  const { rowsAffected } = await exec("UPDATE applications SET business_rating = ?, business_review = ? WHERE id = ? AND status = 'came' AND business_rating IS NULL",
+    rating, review(body.review), id);
   if (!rowsAffected) fail(409, 'Bu smenani baholab bo‘lmaydi');
   return { ok: true };
 }
+
+// "Haqimni oldim" (got = true) yoki "Hali olmadim" (false). Smena tugaganidan keyin bir sutka ichida olingan haq — o'z vaqtida (yes),
+// "hali olmadim" deganidan keyin yoki kechroq — kechikib (late). Biznesning "haqni o'z vaqtida to'laydi" foizi shundan hisoblanadi
+const paidKeyboard = (lang: Lang, appId: number) => ({
+  inline_keyboard: [[{ text: T(lang, '💸 Haqimni oldim'), callback_data: `p:${appId}:y` }, { text: T(lang, '⏳ Hali olmadim'), callback_data: `p:${appId}:n` }]],
+});
+
+async function markPaid(ctx: Ctx, id: number, got: boolean) {
+  const a = await workerApplication(ctx.user, id);
+  if (a.status !== 'came') fail(409, 'Haqni faqat bajarilgan smena uchun belgilash mumkin');
+  const worker = ctx.user!.name;
+  if (got) {
+    if (a.paid === 'yes' || a.paid === 'late') fail(409, 'Haqingizni olganingiz belgilangan');
+    const paid = a.paid === 'no' || Date.now() > shiftSpan(a).end + 864e5 ? 'late' : 'yes';
+    const { rowsAffected } = await exec("UPDATE applications SET paid = ?, paid_at = ? WHERE id = ? AND (paid IS NULL OR paid = 'no')", paid, tashkentStamp(Date.now()), a.id);
+    if (!rowsAffected) fail(409, 'Haqingizni olganingiz belgilangan');
+    if (a.paid === 'no') notify(ctx, a.business_id, (lang) => ({ text: T(lang, '💸 {worker} haqini olganini tasdiqladi: {shift}', { worker, shift: shiftLine(lang, a) }) }));
+    return paid;
+  }
+  const { rowsAffected } = await exec("UPDATE applications SET paid = 'no' WHERE id = ? AND paid IS NULL", a.id);
+  if (!rowsAffected) fail(409, 'Bu smena uchun javob berilgan');
+  notify(ctx, a.business_id, (lang) => ({
+    text: T(lang, '⚠️ {worker} {shift} smenasi uchun haqini hali olmaganini aytdi. Iltimos, to‘lovni tekshiring: ishchilar haqni o‘z vaqtida to‘laydigan bizneslarni tanlaydi.', { worker, shift: shiftLine(lang, a) }),
+  }));
+  return 'no';
+}
+
+const paid = async (ctx: Ctx) => ({ paid: await markPaid(ctx, ctx.id, ctx.body.got === true) });
 
 async function cancel(ctx: Ctx) {
   const { user, id } = ctx;
@@ -1021,7 +1317,8 @@ async function cancel(ctx: Ctx) {
 }
 
 // "Keldim": ishchi joyiga yetib kelganini belgilaydi (smena boshlanishidan 1 soat oldindan tugaguncha). Biznesga darhol xabar boradi;
-// "keldi" bahosini baribir biznes qo'yadi
+// "keldi" bahosini baribir biznes qo'yadi. Smena joyi xaritada belgilangan bo'lsa, telefon joylashuvi (lat, lng) shart va
+// smena joyidan 300 m ichida bo'lishi kerak; masofa biznesga ham ko'rinadi
 async function checkin(ctx: Ctx) {
   const a = await workerApplication(ctx.user, ctx.id);
   if (a.status !== 'accepted') fail(409, 'Faqat qabul qilingan smenada “Keldim” deb belgilash mumkin');
@@ -1029,11 +1326,21 @@ async function checkin(ctx: Ctx) {
   const { start, end } = shiftSpan(a);
   if (Date.now() < start - 3600_000) fail(409, 'Smenaga hali erta: “Keldim” ni smena boshlanishidan bir soat oldin bosish mumkin');
   if (Date.now() > end) fail(409, 'Smena tugagan: endi “Keldim” ni bosib bo‘lmaydi');
+  const here = point(ctx.body.lat, ctx.body.lng);
+  let dist: number | null = null;
+  if (a.lat != null) {
+    if (!here) fail(400, 'Joylashuvingizni aniqlab bo‘lmadi. Telefonda joylashuvni yoqing, brauzerga ruxsat bering va qayta bosing');
+    dist = distance(here, a as Point);
+    if (dist > CHECKIN_RADIUS) fail(409, 'Siz smena joyidan {dist} uzoqdasiz. “Keldim” ni joyiga yetib kelgach bosing ({max} m ichida)', { dist: meters(ctx.lang, dist), max: CHECKIN_RADIUS });
+  }
   const at = tashkentStamp(Date.now());
-  const { rowsAffected } = await exec("UPDATE applications SET checkin_at = ?, confirm = 'yes' WHERE id = ? AND status = 'accepted' AND checkin_at IS NULL", at, a.id);
+  const { rowsAffected } = await exec("UPDATE applications SET checkin_at = ?, checkin_dist = ?, confirm = 'yes' WHERE id = ? AND status = 'accepted' AND checkin_at IS NULL", at, dist, a.id);
   if (!rowsAffected) fail(409, 'Siz allaqachon “Keldim” deb belgilagansiz');
-  notify(ctx, a.business_id, (lang) => ({ text: T(lang, '📍 {worker} joyiga keldi ({time}): {shift}', { worker: ctx.user!.name, time: at.slice(11), shift: shiftLine(lang, a) }) }));
-  return { ok: true, checkin_at: at };
+  notify(ctx, a.business_id, (lang) => ({
+    text: T(lang, dist == null ? '📍 {worker} joyiga keldi ({time}): {shift}' : '📍 {worker} joyiga keldi ({time}, smena joyidan {dist}): {shift}',
+      { worker: ctx.user!.name, time: at.slice(11), dist: dist == null ? '' : meters(lang, dist), shift: shiftLine(lang, a) }),
+  }));
+  return { ok: true, checkin_at: at, checkin_dist: dist };
 }
 
 // --- Sevimli ishchilar ---
@@ -1089,6 +1396,210 @@ async function inviteFavorite(ctx: Ctx) {
   return { ok: true };
 }
 
+// --- Brigada ---
+// Ishchilar jamoasi: boshliq raqam bo'yicha ishchilarni taklif qiladi, ular ilovada yoki Telegram tugmasi bilan qo'shiladi.
+// Boshliq "Brigada bilan ariza" bosganda barcha a'zolar nomidan ariza ketadi; biznes brigadani bir bosishda qabul qiladi
+const BRIGADE_MAX = 10;
+
+async function myBrigade({ user }: Ctx) {
+  need(user, 'worker');
+  const invites = await all(
+    `SELECT b.id, b.name, l.name leader FROM brigade_members m JOIN brigades b ON b.id = m.brigade_id JOIN users l ON l.id = b.leader_id
+     WHERE m.worker_id = ? AND m.joined = 0 ORDER BY m.created_at DESC`, user.id);
+  const b = await one('SELECT b.* FROM brigades b JOIN brigade_members m ON m.brigade_id = b.id WHERE m.worker_id = ? AND m.joined = 1', user.id);
+  if (!b) return { brigade: null, invites };
+  const members = await all(
+    `SELECT u.id, u.name, u.blocked, m.joined, (SELECT updated_at FROM photos WHERE user_id = u.id) photo_v, ${WORKER_STATS('u.id')}
+     FROM brigade_members m JOIN users u ON u.id = m.worker_id WHERE m.brigade_id = ? ORDER BY u.id = ? DESC, m.joined DESC, m.created_at`, b.id, b.leader_id);
+  return {
+    brigade: {
+      id: b.id, name: b.name, leader_id: b.leader_id, mine: b.leader_id === user.id,
+      members: members.map(({ photo_v, ...m }) => ({ ...m, ...trust(m), joined: !!m.joined, photo: photo_v ? photoUrl(m.id, photo_v) : null })),
+    },
+    invites,
+  };
+}
+
+async function createBrigade(ctx: Ctx) {
+  const { user, body } = ctx;
+  need(user, 'worker');
+  await needProfile(user);
+  const name = str(body.name, 2, 40, 'Brigada nomi');
+  if (await one('SELECT 1 FROM brigade_members WHERE worker_id = ? AND joined = 1', user.id)) fail(409, 'Siz allaqachon brigadadasiz. Yangisini tuzish uchun avval undan chiqing');
+  try {
+    await db.batch([
+      { sql: 'INSERT INTO brigades (leader_id, name) VALUES (?, ?)', args: [user.id, name] },
+      { sql: 'INSERT INTO brigade_members (brigade_id, worker_id, joined) VALUES (last_insert_rowid(), ?, 1)', args: [user.id] },
+      // Boshqa brigadalarning takliflari endi kerak emas
+      { sql: 'DELETE FROM brigade_members WHERE worker_id = ? AND joined = 0', args: [user.id] },
+    ], 'write');
+  } catch (e) {
+    if (isUnique(e)) fail(409, 'Siz allaqachon brigadadasiz. Yangisini tuzish uchun avval undan chiqing');
+    throw e;
+  }
+  return myBrigade(ctx);
+}
+
+async function leaderBrigade(user: User | undefined) {
+  need(user, 'worker');
+  return await one('SELECT * FROM brigades WHERE leader_id = ?', user.id) || fail(404, 'Avval brigada tuzing');
+}
+
+async function brigadeInvite(ctx: Ctx) {
+  const b = await leaderBrigade(ctx.user);
+  const p = phone(ctx.body.phone);
+  const w = await one("SELECT id, name FROM users WHERE phone = ? AND role = 'worker' AND demo = 0", p) || fail(404, 'Bu raqam bilan ishchi ro‘yxatdan o‘tmagan');
+  if (w.id === ctx.user!.id) fail(400, 'O‘zingizni taklif qila olmaysiz');
+  if (Number((await one('SELECT COUNT(*) n FROM brigade_members WHERE brigade_id = ?', b.id))?.n) >= BRIGADE_MAX) fail(409, 'Brigadada ko‘pi bilan {n} kishi bo‘ladi', { n: BRIGADE_MAX });
+  if (await one('SELECT 1 FROM brigade_members WHERE worker_id = ? AND joined = 1', w.id)) fail(409, 'Bu ishchi boshqa brigadada');
+  try {
+    await exec('INSERT INTO brigade_members (brigade_id, worker_id) VALUES (?, ?)', b.id, w.id);
+  } catch (e) {
+    if (isUnique(e)) fail(409, 'Bu ishchi taklif qilingan');
+    throw e;
+  }
+  notify(ctx, w.id, (lang) => ({
+    text: T(lang, '👥 {leader} sizni “{name}” brigadasiga taklif qilmoqda.\n\nQo‘shilsangiz, boshliq sizni ham smenalarga brigada bilan yozadi (kela olmasangiz, arizani o‘zingiz bekor qilasiz).\n\nIlovada: {link}',
+      { leader: ctx.user!.name, name: b.name, link: appLink(ctx, '/ilova/brigada') }),
+    reply_markup: { inline_keyboard: [[{ text: T(lang, '✅ Qo‘shilaman'), callback_data: `b:${b.id}:y` }, { text: T(lang, '❌ Yo‘q'), callback_data: `b:${b.id}:n` }]] },
+  }));
+  return myBrigade(ctx);
+}
+
+// Taklifga javob (ilova yoki Telegram tugmasi): qo'shilsa brigada nomi, rad etsa null qaytadi
+async function joinBrigade(ctx: Ctx, brigadeId: number, accept: boolean) {
+  need(ctx.user, 'worker');
+  const b = await one(
+    `SELECT b.* FROM brigade_members m JOIN brigades b ON b.id = m.brigade_id WHERE m.brigade_id = ? AND m.worker_id = ? AND m.joined = 0`,
+    brigadeId, ctx.user.id) || fail(404, 'Taklif topilmadi');
+  if (!accept) {
+    await exec('DELETE FROM brigade_members WHERE brigade_id = ? AND worker_id = ? AND joined = 0', b.id, ctx.user.id);
+    return null;
+  }
+  try {
+    await db.batch([
+      { sql: 'UPDATE brigade_members SET joined = 1 WHERE brigade_id = ? AND worker_id = ? AND joined = 0', args: [b.id, ctx.user.id] },
+      { sql: 'DELETE FROM brigade_members WHERE worker_id = ? AND joined = 0', args: [ctx.user.id] },
+    ], 'write');
+  } catch (e) {
+    if (isUnique(e)) fail(409, 'Siz allaqachon brigadadasiz. Avval undan chiqing');
+    throw e;
+  }
+  const worker = ctx.user.name;
+  notify(ctx, b.leader_id, (lang) => ({ text: T(lang, '👥 {worker} “{name}” brigadangizga qo‘shildi.', { worker, name: b.name }) }));
+  return b.name as string;
+}
+
+const answerBrigade = async (ctx: Ctx) => {
+  await joinBrigade(ctx, Number(ctx.body.id), ctx.body.accept === true);
+  return myBrigade(ctx);
+};
+
+// A'zo chiqadi; boshliq chiqsa, brigada tarqatiladi (a'zolarga xabar). Berilgan arizalar o'z holicha qoladi
+async function leaveBrigade(ctx: Ctx) {
+  const { user } = ctx;
+  need(user, 'worker');
+  const b = await one('SELECT b.* FROM brigades b JOIN brigade_members m ON m.brigade_id = b.id WHERE m.worker_id = ? AND m.joined = 1', user.id) || fail(404, 'Siz brigadada emassiz');
+  if (b.leader_id === user.id) {
+    const members = await all('SELECT worker_id FROM brigade_members WHERE brigade_id = ? AND joined = 1 AND worker_id != ?', b.id, user.id);
+    await db.batch([
+      { sql: 'DELETE FROM brigade_members WHERE brigade_id = ?', args: [b.id] },
+      { sql: 'DELETE FROM brigades WHERE id = ?', args: [b.id] },
+    ], 'write');
+    for (const m of members) notify(ctx, m.worker_id, (lang) => ({ text: T(lang, '👥 “{name}” brigadasi tarqatildi.', { name: b.name }) }));
+  } else {
+    await exec('DELETE FROM brigade_members WHERE brigade_id = ? AND worker_id = ?', b.id, user.id);
+    notify(ctx, b.leader_id, (lang) => ({ text: T(lang, '👥 {worker} “{name}” brigadangizdan chiqdi.', { worker: user.name, name: b.name }) }));
+  }
+  return myBrigade(ctx);
+}
+
+async function removeMember(ctx: Ctx) {
+  const b = await leaderBrigade(ctx.user);
+  if (ctx.id === ctx.user!.id) fail(400, 'Brigadani tarqatish uchun “Brigadadan chiqish” ni bosing');
+  const { rowsAffected } = await exec('DELETE FROM brigade_members WHERE brigade_id = ? AND worker_id = ?', b.id, ctx.id);
+  if (!rowsAffected) fail(404, 'Ishchi topilmadi');
+  return myBrigade(ctx);
+}
+
+// --- Biznes sahifasi: baho, sharhlar, haqni o'z vaqtida to'lash foizi ---
+// Sharh muallifi: ism va familiyaning bosh harfi (to'liq ism ko'rsatilmaydi)
+async function orgPage({ id }: Ctx) {
+  const org = await one(
+    `SELECT u.id, u.org, u.org_type, u.region, u.district, u.demo, u.created_at,
+       (SELECT ROUND(AVG(a.business_rating), 1) FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE s.business_id = u.id) rating,
+       (SELECT COUNT(*) FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE s.business_id = u.id AND a.status = 'came') done,
+       (SELECT COUNT(*) FROM applications a JOIN shifts s ON s.id = a.shift_id WHERE s.business_id = u.id AND a.paid IS NOT NULL) paid_n,
+       ${PAID_PCT('u.id')} paid_pct
+     FROM users u WHERE u.id = ? AND u.role = 'business'`, id) || fail(404, 'Biznes topilmadi');
+  const reviews = await all(
+    `SELECT a.business_rating rating, a.business_review text, s.date, s.title, w.first_name, w.last_name, w.name
+     FROM applications a JOIN shifts s ON s.id = a.shift_id JOIN users w ON w.id = a.worker_id
+     WHERE s.business_id = ? AND a.business_rating IS NOT NULL ORDER BY s.date DESC, a.id DESC LIMIT 30`, id);
+  return {
+    org,
+    reviews: reviews.map(({ first_name, last_name, name, ...r }) => ({ ...r, author: `${first_name || String(name).split(' ')[0]}${last_name ? ` ${last_name[0]}.` : ''}` })),
+  };
+}
+
+// --- Oylik hisobot ---
+// Ishchiga: har oyda bajargan smenalari, topgani, Smena ulushi (15%) va qo'liga tushgani, ishlagan soatlari.
+// Biznesga: har oyda nechta smena bajarilgan va ishchilarga qancha to'langan
+const SHARE = 0.15;
+async function monthRows(user: Row) {
+  return all(user.role === 'worker'
+    ? `SELECT a.id, s.date, s.start_time, s.end_time, s.title, s.pay, u.org who, a.paid FROM applications a
+       JOIN shifts s ON s.id = a.shift_id JOIN users u ON u.id = s.business_id WHERE a.worker_id = ? AND a.status = 'came' ORDER BY s.date DESC, s.start_time DESC`
+    : `SELECT a.id, s.date, s.start_time, s.end_time, s.title, s.pay, w.name who, a.paid FROM applications a
+       JOIN shifts s ON s.id = a.shift_id JOIN users w ON w.id = a.worker_id WHERE s.business_id = ? AND a.status = 'came' ORDER BY s.date DESC, s.start_time DESC`,
+    user.id);
+}
+
+function months(rows: Row[]) {
+  const out = new Map<string, Row>();
+  for (const r of rows) {
+    const key = String(r.date).slice(0, 7);
+    const m = out.get(key) ?? out.set(key, { month: key, shifts: 0, gross: 0, hours: 0, items: [] }).get(key)!;
+    const { start, end } = shiftSpan(r);
+    m.shifts++;
+    m.gross += Number(r.pay);
+    m.hours += (end - start) / 3600_000;
+    m.items.push(r);
+  }
+  return [...out.values()].map((m): Row => ({ ...m, hours: Math.round(m.hours * 10) / 10, share: Math.round(m.gross * SHARE), net: m.gross - Math.round(m.gross * SHARE) }));
+}
+
+async function report({ user }: Ctx) {
+  need(user);
+  const list = months(await monthRows(user));
+  const sum = (k: string) => list.reduce((a, m) => a + Number(m[k]), 0);
+  return { role: user.role, months: list, total: { shifts: sum('shifts'), gross: sum('gross'), share: sum('share'), net: sum('net'), hours: Math.round(sum('hours') * 10) / 10 } };
+}
+
+// Har oyning 1–3-kunlari (soat 10:00 dan keyin) o'tgan oy hisoboti Telegram'ga, bir marta: meta yozuvi qaysi oy yuborilganini saqlaydi
+async function monthlyReports(ctx: { tasks: Promise<unknown>[]; origin: string }) {
+  const { date, time } = now();
+  if (!tgToken() || Number(date.slice(8)) > 3 || time < '10:00') return 0;
+  const prev = addDays(`${date.slice(0, 8)}01`, -1).slice(0, 7);
+  const { rowsAffected } = await exec("INSERT INTO meta (key, value) VALUES (?, datetime('now')) ON CONFLICT (key) DO NOTHING", `report:${prev}`);
+  if (!rowsAffected) return 0;
+  const users = await all(
+    `SELECT DISTINCT u.* FROM users u JOIN telegram_links t ON t.phone = u.phone
+     WHERE u.demo = 0 AND EXISTS (SELECT 1 FROM applications a JOIN shifts s ON s.id = a.shift_id
+       WHERE a.status = 'came' AND s.date LIKE ? AND (a.worker_id = u.id OR s.business_id = u.id))`, `${prev}-%`);
+  for (const u of users) {
+    const m = months(await monthRows(u)).find((x) => x.month === prev);
+    if (!m) continue;
+    notify(ctx, u.id, (lang) => ({
+      text: T(lang, u.role === 'worker'
+        ? '📊 {month} hisobotingiz:\nSmenalar: {n} ta, {hours} soat\nTopganingiz: {gross}\nSmena ulushi (15%): {share}\nQo‘lingizga: {net}\n\nBatafsil: {link}'
+        : '📊 {month} hisobotingiz:\nBajarilgan smenalar: {n} ta, {hours} soat\nIshchilarga to‘langan: {gross}\n\nBatafsil: {link}',
+      { month: monthName(lang, prev), n: m.shifts, hours: m.hours, gross: money(lang, m.gross), share: money(lang, m.share), net: money(lang, m.net), link: appLink(ctx, '/ilova/daromad') }),
+    }));
+  }
+  return users.length;
+}
+
 // --- Farbo: ovozli AI yordamchi (Google Gemini) ---
 // Brauzer matn yoki ovoz (WAV) yuboradi. Server foydalanuvchining kontekstini (ochiq smenalar, arizalari yoki smenalari)
 // yig'ib, Gemini'dan JSON javob oladi. Kalit faqat serverda: GEMINI_API_KEY. test.ts GEMINI_BASE bilan soxta serverga yo'naltiradi.
@@ -1097,7 +1608,7 @@ const geminiBase = () => process.env.GEMINI_BASE || 'https://generativelanguage.
 const AI_MODELS = () => (process.env.GEMINI_MODELS || 'gemini-3.5-flash,gemini-3.1-flash-lite').split(',');
 // Ovoz: avval sifatliroq model, limiti tugasa yengili (har birining kunlik limiti alohida)
 const TTS_MODELS = () => (process.env.GEMINI_TTS_MODELS || 'gemini-3.8-flash-tts,gemini-3.8-flash-lite-tts').split(',');
-const AI_LINKS = ['/ilova/smenalar', '/ilova/arizalarim', '/ilova/biznes', '/ilova/yangi', '/ilova/profil', '/qoidalar', '/savollar', '/bizneslar'];
+const AI_LINKS = ['/ilova/smenalar', '/ilova/arizalarim', '/ilova/biznes', '/ilova/yangi', '/ilova/profil', '/ilova/daromad', '/ilova/brigada', '/qoidalar', '/savollar', '/bizneslar'];
 const WEEKDAYS = ['yakshanba', 'dushanba', 'seshanba', 'chorshanba', 'payshanba', 'juma', 'shanba'];
 
 const FARBO_RULES = `Sen "Farbo" — Smena ilovasining ovozli yordamchisisan. Smena — Toshkentdagi bir kunlik ish (smena) platformasi: biznes smena e’lon qiladi, ishchilar ariza beradi, biznes tanlaydi.
@@ -1109,15 +1620,44 @@ Javob qoidalari:
 - Ariza berish, qabul qilish kabi amallarni o‘zing bajara olmaysan: smenani ko‘rsat, foydalanuvchi kartochkadagi tugmani bossin.
 - demo: 1 bo‘lgan smena — namuna (demo): u haqida gapirsang, demo ekanini ayt; unga ariza berib bo‘lmaydi.
 - Ilova qoidalari: qabul qilingan smenaga kelmagan ishchi bloklanadi; smenadan kamida bir kun oldin bekor qilish bepul; telefon raqam faqat qabuldan keyin ochiladi; ishchi bajarilgan smena haqining 15% ini Smena ulushi sifatida to‘laydi (200 000 so‘mdan 30 000, qo‘lga 170 000); biznes uchun e’lon qilish va tanlash bepul; ariza berish uchun profil to‘liq bo‘lishi kerak.
+- Imkoniyatlar: "Shoshilinch" smenalar ro‘yxat tepasida turadi va yaqindagi ishonchli ishchilarga Telegram’da xabar boradi; smenalarni xaritada ko‘rish va "Yaqinimdagilar" (/ilova/smenalar); "Keldim" smena joyidan 300 m ichida ishlaydi; brigada bilan birga ariza berish (/ilova/brigada); smenadan keyin "Haqimni oldim" — bizneslarning haqni o‘z vaqtida to‘lash foizi shundan; baho bilan yozma sharh; oylik daromad hisoboti (/ilova/daromad); do‘stni taklif qilish: u birinchi smenasini bajarsa, 1 hafta Pro sovg‘a (Profil sahifasida havola).
 - Ilovaga aloqasi yo‘q savolga bir gapda muloyim javob berib, smenalar mavzusiga qaytar.
 - speech: reply bilan bir xil gap, lekin ovoz uchun: barcha raqam, vaqt va pulni o‘zbekcha so‘z bilan yoz (250 000 so‘m → ikki yuz ellik ming so‘m, 18:00 → kechki soat oltida, 31-oktyabr → o‘ttiz birinchi oktyabr), qisqartma va belgilarsiz.
 - Foydalanuvchi ovozli xabar yuborsa, heard ga u aytgan gapning aniq matnini yoz; matnli xabarda heard bo‘sh satr.`;
+
+// Faqat biznesga: aytgan gapidan smena loyihasi. Farbo e'lon qilmaydi — biznes formada tekshirib, o'zi e'lon qiladi
+const FARBO_DRAFT_RULES = `
+- Foydalanuvchi — biznes. Agar u smena e’lon qilmoqchi yoki ishchi kerakligini aytsa (masalan, "ertaga kechki 6 dan 11 gacha 5 ta ofitsiant kerak, 250 ming"), draft ga smena loyihasini yoz: title — lavozim (bosh harf bilan, masalan "Ofitsiant"), date — YYYY-MM-DD ("bugun", "ertaga", "shanba" ni "bugun" sanasidan hisobla), start va end — HH:MM (24 soatlik), pay — bir ishchiga so‘mda butun son ("250 ming" → 250000), slots — necha kishi, place — aytilmasa MA’LUMOTLAR dagi biznes manzili, note — kiyim, ovqat kabi qo‘shimchalar, urgent — "shoshilinch", "tezda", "hozir kerak" desa true. Aytilmagan va taxmin qilib bo‘lmaydigan maydonni bo‘sh satr yoki 0 qoldir. reply da loyihani qisqa ayt va "Formani tekshirib, e’lon qiling" de: smenani o‘zing e’lon qilmaysan. Smena so‘ralmasa, draft ni umuman yozma.`;
+
+const DRAFT_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    title: { type: 'STRING' }, date: { type: 'STRING' }, start: { type: 'STRING' }, end: { type: 'STRING' },
+    pay: { type: 'INTEGER' }, slots: { type: 'INTEGER' }, place: { type: 'STRING' }, note: { type: 'STRING' }, urgent: { type: 'BOOLEAN' },
+  },
+};
 
 const AI_SCHEMA = {
   type: 'OBJECT',
   properties: { heard: { type: 'STRING' }, reply: { type: 'STRING' }, speech: { type: 'STRING' }, shift_ids: { type: 'ARRAY', items: { type: 'INTEGER' } }, link: { type: 'STRING' } },
   required: ['heard', 'reply', 'speech', 'shift_ids', 'link'],
 };
+const BUSINESS_AI_SCHEMA = { ...AI_SCHEMA, properties: { ...AI_SCHEMA.properties, draft: DRAFT_SCHEMA } };
+
+// Modeldan kelgan loyihani tekshiradi: noto'g'ri maydon bo'sh qoladi (forma uni so'raydi); lavozim bo'lmasa loyiha yo'q
+function shiftDraft(v: unknown) {
+  if (!v || typeof v !== 'object') return null;
+  const d = v as Row;
+  const text = (x: unknown, max: number) => (typeof x === 'string' ? x.trim().slice(0, max) : '');
+  const hhmm = (x: unknown) => (typeof x === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(x) ? x : '');
+  const whole = (x: unknown, min: number, max: number) => (Number.isInteger(x) && (x as number) >= min && (x as number) <= max ? x as number : null);
+  const draft = {
+    title: text(d.title, 80), place: text(d.place, 120), note: text(d.note, 500),
+    date: typeof d.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d.date) && d.date >= now().date ? d.date : '',
+    start: hhmm(d.start), end: hhmm(d.end), pay: whole(d.pay, 10000, 5000000), slots: whole(d.slots, 1, 50), urgent: d.urgent === true,
+  };
+  return draft.title.length >= 2 ? draft : null;
+}
 
 // Amaldagi tarif: Pro muddati o'tgan bo'lsa (yoki yo'q bo'lsa) — bepul
 const activePlan = (u: Row): Plan => (u.plan === 'pro' && (!u.plan_until || u.plan_until >= now().date) ? 'pro' : 'free');
@@ -1191,7 +1731,7 @@ async function aiContext(user: User | undefined) {
   if (!user) return { ...data, men: 'mehmon (hisobga kirmagan)' };
   const p: Row = await profile(user);
   data.men = {
-    ism: p.first_name || p.name, rol: p.role === 'worker' ? 'ishchi' : 'biznes', biznes: p.org, viloyat: p.region, tuman: p.district,
+    ism: p.first_name || p.name, rol: p.role === 'worker' ? 'ishchi' : 'biznes', biznes: p.org, biznes_manzili: p.address, viloyat: p.region, tuman: p.district,
     yosh: p.age, konikmalar: p.skills, reyting: p.rating, bajargan_smenalar: p.done, bloklangan: p.blocked, profil_toliq: p.complete,
   };
   if (user.role === 'worker') {
@@ -1251,11 +1791,13 @@ const idsOf = (v: unknown) => (Array.isArray(v) ? v.map(Number).filter((id) => N
 async function askFarbo(ctx: Ctx) {
   const input = askInput(ctx.body);
   const left = await aiLimit(ctx, 'ai');
-  const { out, heard, reply, speech } = await farboJson(FARBO_RULES + FARBO_LANG[ctx.lang], await aiContext(ctx.user), input, AI_SCHEMA);
+  const business = ctx.user?.role === 'business';
+  const { out, heard, reply, speech } = await farboJson(FARBO_RULES + (business ? FARBO_DRAFT_RULES : '') + FARBO_LANG[ctx.lang], await aiContext(ctx.user), input,
+    business ? BUSINESS_AI_SCHEMA : AI_SCHEMA);
   // Faqat kontekstdagi ochiq smenalar: model o'ylab topgan id kartochka bo'lib chiqmaydi
   const open = (await listShifts(ctx)) as Row[];
   const shifts = idsOf(out.shift_ids).map((id) => open.find((s) => s.id === id)).filter(Boolean).slice(0, 5);
-  return { heard, reply, speech, shifts, link: AI_LINKS.includes(out.link) ? out.link : '', left };
+  return { heard, reply, speech, shifts, link: AI_LINKS.includes(out.link) ? out.link : '', left, draft: business ? shiftDraft(out.draft) : null };
 }
 
 // Admin panelidagi Farbo: butun platforma bo'yicha savol-javob, limitsiz.
@@ -1523,6 +2065,10 @@ async function adminDeleteUser(ctx: Ctx) {
     { sql: 'DELETE FROM shifts WHERE business_id = ?', args: [u.id] },
     { sql: 'DELETE FROM sessions WHERE user_id = ?', args: [u.id] },
     { sql: 'DELETE FROM photos WHERE user_id = ?', args: [u.id] },
+    // Brigadasi bo'lsa tarqatiladi; uni taklif qilgan do'stlar "taklif qiluvchisiz" qoladi
+    { sql: 'DELETE FROM brigade_members WHERE worker_id = ? OR brigade_id IN (SELECT id FROM brigades WHERE leader_id = ?)', args: [u.id, u.id] },
+    { sql: 'DELETE FROM brigades WHERE leader_id = ?', args: [u.id] },
+    { sql: 'UPDATE users SET ref_by = NULL WHERE ref_by = ?', args: [u.id] },
     { sql: 'DELETE FROM ai_calls WHERE key IN (?, ?)', args: [`ai:u${u.id}`, `tts:u${u.id}`] },
     { sql: 'DELETE FROM login_fails WHERE key = ?', args: [`phone:${u.phone}`] },
     { sql: 'DELETE FROM otp_codes WHERE phone = ?', args: [u.phone] },
@@ -1540,6 +2086,8 @@ async function adminTelegram(ctx: Ctx) {
     const set = await telegram('setWebhook', { url: `${ctx.origin}/api/telegram/webhook`, secret_token: tgSecret(), allowed_updates: TG_UPDATES, drop_pending_updates: true });
     if (!set.ok) fail(502, `Telegram webhook o‘rnatilmadi: ${set.description ?? ''}`);
     await telegram('setMyCommands', { commands: [{ command: 'start', description: 'Raqamni bog‘lash va kod olish' }] });
+    // Yozish maydoni yonidagi doimiy "Smena" tugmasi: ilovani Telegram ichida ochadi
+    await telegram('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Smena', web_app: { url: webAppUrl(ctx) } } });
   }
   const [me, hook] = await Promise.all([telegram('getMe', {}), telegram('getWebhookInfo', {})]);
   const linked = await one('SELECT COUNT(*) n FROM telegram_links');
@@ -1663,6 +2211,7 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['POST', /^\/api\/login\/check$/, loginCheck],
   ['POST', /^\/api\/login\/code$/, codeLogin],
   ['POST', /^\/api\/telegram\/webhook$/, telegramWebhook],
+  ['POST', /^\/api\/telegram\/app$/, telegramApp],
   ['GET', /^\/api\/cron\/reminders$/, cronReminders],
   ['POST', /^\/api\/lang$/, setLang],
   ['POST', /^\/api\/login$/, login],
@@ -1671,6 +2220,9 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['GET', /^\/api\/me$/, ({ user }) => user && profile(user)],
   ['POST', /^\/api\/me\/profile$/, updateProfile],
   ['POST', /^\/api\/me\/photo$/, setPhoto],
+  ['POST', /^\/api\/me\/location$/, setLocation],
+  ['GET', /^\/api\/me\/report$/, report],
+  ['GET', /^\/api\/orgs\/(\d+)$/, orgPage],
   ['POST', /^\/api\/me\/password$/, changePassword],
   ['GET', /^\/api\/photos\/(\d+)$/, getPhoto],
   ['POST', /^\/api\/ai$/, askFarbo],
@@ -1685,6 +2237,13 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['POST', /^\/api\/applications\/(\d+)\/rate$/, rate],
   ['POST', /^\/api\/applications\/(\d+)\/cancel$/, cancel],
   ['POST', /^\/api\/applications\/(\d+)\/checkin$/, checkin],
+  ['POST', /^\/api\/applications\/(\d+)\/paid$/, paid],
+  ['GET', /^\/api\/brigade$/, myBrigade],
+  ['POST', /^\/api\/brigade$/, createBrigade],
+  ['POST', /^\/api\/brigade\/invite$/, brigadeInvite],
+  ['POST', /^\/api\/brigade\/answer$/, answerBrigade],
+  ['POST', /^\/api\/brigade\/leave$/, leaveBrigade],
+  ['POST', /^\/api\/brigade\/members\/(\d+)\/remove$/, removeMember],
   ['GET', /^\/api\/favorites$/, listFavorites],
   ['POST', /^\/api\/favorites\/(\d+)\/invite$/, inviteFavorite],
   ['POST', /^\/api\/favorites\/(\d+)$/, setFavorite],
@@ -1705,7 +2264,7 @@ export async function handle(req: ApiRequest): Promise<ApiResponse> {
   // Eslatmalar tashqi cron'ni kutmasdan ham ketadi: istalgan so'rovdan keyin, daqiqada bir martadan ko'p emas
   if (req.defer && Date.now() - remindersCheckedAt > 60_000) {
     remindersCheckedAt = Date.now();
-    ctx.tasks.push(ready.then(remindersDue).then((due) => (due ? runReminders(ctx) : 0)).catch((e) => console.error('Eslatmalar', e)));
+    ctx.tasks.push(ready.then(remindersDue).then(async (due) => { if (due) await Promise.all([runReminders(ctx), monthlyReports(ctx)]); }).catch((e) => console.error('Eslatmalar', e)));
   }
   const res = await dispatch(req, ctx);
   // Ishlar bajarilayotganda yangilari qo'shilishi mumkin (eslatma → bildirishnoma): ro'yxat oxirigacha kutiladi

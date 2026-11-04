@@ -43,6 +43,14 @@ export const tashkentDate = (plusDays = 0) => new Date(Date.now() + plusDays * 8
 export const money = (lang: Lang, n: number) => `${Number(n).toLocaleString('ru-RU')} ${CURRENCY[lang]}`;
 export const currency = (lang: Lang) => CURRENCY[lang];
 
+// Oy nomi hisobotlar uchun: "oktabr 2026", "октябрь 2026", "October 2026" (ym — YYYY-MM)
+const MONTHS_NOMINATIVE: Record<Lang, string[]> = {
+  uz: MONTHS.uz,
+  ru: ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'],
+  en: MONTHS.en,
+};
+export const monthName = (lang: Lang, ym: string) => `${MONTHS_NOMINATIVE[lang][Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}`;
+
 export function dayName(lang: Lang, iso: string, withWeekday = true) {
   if (iso === tashkentDate()) return TODAY[lang][0];
   if (iso === tashkentDate(1)) return TODAY[lang][1];

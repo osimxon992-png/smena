@@ -10,21 +10,23 @@ import { api, type Me, type Shift } from '@/lib/client';
 // Admin panelida javobdagi foydalanuvchi va smenalar: bosilsa panelning kartochkasi ochiladi
 type Ref = { kind: 'user' | 'shift'; id: number; label: string; sub: string };
 // speech: javobning ovoz uchun nusxasi (raqamlar o'zbekcha so'z bilan)
-type Msg = { role: 'user' | 'model'; text: string; speech?: string; shifts?: Shift[]; link?: string; refs?: Ref[] };
+// draft: biznes aytgan gapdan smena loyihasi; tekshirib e'lon qilish uchun formaga o'tadi
+type Draft = { title: string; place: string; note: string; date: string; start: string; end: string; pay: number | null; slots: number | null; urgent: boolean };
+type Msg = { role: 'user' | 'model'; text: string; speech?: string; shifts?: Shift[]; link?: string; refs?: Ref[]; draft?: Draft | null };
 // left: bugun qolgan savollar (tarif bo'yicha; mehmon va admin uchun null)
-type Answer = { heard: string; reply: string; speech?: string; shifts?: Shift[]; link?: string; refs?: Ref[]; left?: number | null };
+type Answer = { heard: string; reply: string; speech?: string; shifts?: Shift[]; link?: string; refs?: Ref[]; left?: number | null; draft?: Draft | null };
 
 const MAX_SECONDS = 20;
 // Brauzer "Farbo" ni turlicha eshitishi mumkin: farba, farbu, parbo, farrbo, фарбо (\b kirill harflarida ishlamaydi)
 const WAKE = /(?:^|[\s,.!?])([fp]ar+b[oau]|фар+б[оау])(?=$|[\s,.!?])[\s,.!?]*/i;
 const LINKS: Record<string, string> = {
   '/ilova/smenalar': 'Smenalar', '/ilova/arizalarim': 'Arizalarim', '/ilova/biznes': 'Smenalarim', '/ilova/yangi': 'Yangi smena',
-  '/ilova/profil': 'Profil', '/qoidalar': 'Qoidalar', '/savollar': 'Savollar', '/bizneslar': 'Bizneslar uchun',
+  '/ilova/profil': 'Profil', '/ilova/daromad': 'Daromad hisoboti', '/ilova/brigada': 'Brigada', '/qoidalar': 'Qoidalar', '/savollar': 'Savollar', '/bizneslar': 'Bizneslar uchun',
 };
 const CHIPS = {
   guest: ['Bugungi smenalar', 'Ertaga qanday ish bor?', 'Smena qanday ishlaydi?'],
   worker: ['Bugungi ishlarni ayt', 'Arizalarim qanday?', '200 ming smenadan qo‘limga qancha qoladi?'],
-  business: ['Yangi arizalar bormi?', 'Smenalarim holati', 'Qanday smena e’lon qilay?'],
+  business: ['Yangi arizalar bormi?', 'Ertaga kechki 6 dan 11 gacha 3 ta ofitsiant kerak, 250 ming', 'Smenalarim holati'],
   admin: ['Bugun nima bo‘ldi?', 'Kimlar bloklangan?', 'Jami komissiya qancha?', 'Qaysi biznes eng faol?'],
 };
 
@@ -85,6 +87,30 @@ function ShiftCard({ s, me }: { s: Shift; me: Me | null }) {
           : null}
       {(state.done || s.my_status) && <p className="farbo-ok">{state.done || t('Ariza berilgan')}</p>}
       {state.error && <p className="form-error">{state.error}</p>}
+    </div>
+  );
+}
+
+// Farbo tayyorlagan smena loyihasi: "Formada ochish" yangi smena formasini to'ldiradi, biznes tekshirib o'zi e'lon qiladi
+function DraftCard({ d, onOpen }: { d: Draft; onOpen: () => void }) {
+  const { t, day, som } = useT();
+  const q = new URLSearchParams(Object.entries({
+    lavozim: d.title, manzil: d.place, izoh: d.note, sana: d.date, boshlanish: d.start, tugash: d.end,
+    haq: d.pay ?? '', soni: d.slots ?? '', shoshilinch: d.urgent ? '1' : '',
+  }).filter(([, v]) => v !== '').map(([k, v]) => [k, String(v)]));
+  return (
+    <div className="farbo-shift farbo-draft">
+      <p className="farbo-when">📝 {t('Smena loyihasi')}{d.urgent ? ` · 🔥 ${t('Shoshilinch')}` : ''}</p>
+      <p><b>{d.title}</b>{d.slots ? ` · ${t('{n} kishi', { n: d.slots })}` : ''}</p>
+      <p className="farbo-when">{d.date ? day(d.date) : t('sana aytilmagan')}{d.start ? `, ${d.start}${d.end ? `–${d.end}` : ''}` : ''}</p>
+      {d.pay ? <p className="farbo-pay">{som(d.pay)}</p> : null}
+      {d.place && <p className="farbo-when">📍 {d.place}</p>}
+      {/* Forma allaqachon ochiq bo'lsa, maydonlar qaytadan to'lishi uchun sahifa to'liq yangilanadi */}
+      <Link className="btn" href={`/ilova/yangi?${q}`} onClick={(e) => {
+        onOpen();
+        if (location.pathname === '/ilova/yangi') { e.preventDefault(); location.assign(`/ilova/yangi?${q}`); }
+      }}>{t('Formada ochish')}</Link>
+      <p className="hint">{t('Farbo e’lon qilmaydi: formani tekshirib, o‘zingiz e’lon qilasiz.')}</p>
     </div>
   );
 }
@@ -170,7 +196,7 @@ export default function Farbo({ admin }: { admin?: { onOpen: (target: { kind: Re
       setMsgs((m) => {
         const next = [...m];
         if (payload.audio) next[next.length - 1] = { role: 'user', text: a.heard ? `🎤 ${a.heard}` : `🎤 (${t('ovozli xabar')})` };
-        return [...next, { role: 'model', text: a.reply, speech: a.speech, shifts: a.shifts, link: a.link, refs: a.refs }];
+        return [...next, { role: 'model', text: a.reply, speech: a.speech, shifts: a.shifts, link: a.link, refs: a.refs, draft: a.draft }];
       });
       setLeft(a.left ?? null);
       if (speakRef.current) say(a.speech || a.reply);
@@ -284,6 +310,7 @@ export default function Farbo({ admin }: { admin?: { onOpen: (target: { kind: Re
               <div key={i} className={`farbo-msg ${m.role}`}>
                 <p>{m.text}</p>
                 {m.shifts?.map((s) => <ShiftCard key={s.id} s={s} me={me} />)}
+                {m.draft && <DraftCard d={m.draft} onOpen={() => setOpen(false)} />}
                 {m.link && <Link className="farbo-link" href={m.link} onClick={() => setOpen(false)}>{LINKS[m.link] ? t(LINKS[m.link]) : m.link} →</Link>}
                 {m.refs?.map((r) => (
                   <button key={`${r.kind}${r.id}`} type="button" className="farbo-ref" onClick={() => { admin?.onOpen({ kind: r.kind, id: r.id }); setOpen(false); }}>

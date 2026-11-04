@@ -457,6 +457,20 @@ assert.equal((await call('adm2', `/admin/users/${sub.id}/plan`, { plan: 'pro', m
 assert.equal((await call('adm2', `/admin/users/${sub.id}/plan`, { plan: 'free' })).data.plan, 'free');
 assert.equal(await status('w2', '/ai', { text: 'salom' }), 429, 'bepulga qaytgach yana 30 ta chegarasi');
 assert.equal((await call('guest', '/ai', { text: 'salom' })).data.left, null, 'mehmonga left yo‘q');
+
+// Farbo biznes aytgan gapdan smena loyihasini tayyorlaydi: maydonlar tekshiriladi, smena o'zi e'lon qilinmaydi
+const tmr = new Date(Date.now() + 864e5).toLocaleDateString('en-CA', { timeZone: 'Asia/Tashkent' });
+const bizShiftsBefore = (await call('biz', '/my/shifts')).data.length;
+answer = said({ reply: 'Loyiha tayyor. Formani tekshirib, e’lon qiling.', draft: { title: 'Ofitsiant', date: tmr, start: '18:00', end: '25:00', pay: 250000, slots: 5, place: 'Amir Temur ko‘chasi 1', note: '', urgent: true } });
+const drafted = (await call('biz', '/ai', { text: 'Ertaga kechki 6 dan 5 ta ofitsiant kerak, 250 ming, shoshilinch' })).data;
+assert.deepEqual(drafted.draft, { title: 'Ofitsiant', place: 'Amir Temur ko‘chasi 1', note: '', date: tmr, start: '18:00', end: '', pay: 250000, slots: 5, urgent: true }, 'noto‘g‘ri vaqt bo‘sh qoladi');
+assert.ok(seen.at(-1).body.generationConfig.responseSchema.properties.draft, 'biznes so‘rovida loyiha sxemasi');
+assert.match(seen.at(-1).body.systemInstruction.parts[0].text, /Amir Temur/, 'kontekstda biznes manzili');
+assert.equal((await call('biz', '/my/shifts')).data.length, bizShiftsBefore, 'Farbo smenani o‘zi e’lon qilmaydi');
+answer = said({ reply: 'ok', draft: { title: 'Ofitsiant', date: '2020-01-01' } });
+assert.equal((await call('biz', '/ai', { text: 'smena' })).data.draft.date, '', 'o‘tgan sana bo‘sh qoladi');
+assert.equal((await call('w', '/ai', { text: 'smena och' })).data.draft, null, 'ishchiga loyiha yo‘q');
+assert.ok(!seen.at(-1).body.generationConfig.responseSchema.properties.draft);
 fake.close();
 
 // Admin: Telegram bot holati va ulash
@@ -648,6 +662,172 @@ assert.match(lastTo(bizChat), /Новая заявка: Madina/, 'biznesga xabar
 await tg({ message: { chat: { id: 555, type: 'private' }, from: { id: 555, language_code: 'ru' }, text: '/start' } });
 assert.match(tgSent.at(-1).text, /Здравствуйте/, 'bot Telegram tilida javob beradi');
 assert.equal(tgSent.at(-1).reply_markup.keyboard[0][0].text, '📱 Отправить номер');
+
+// --- Xarita, shoshilinch smenalar, "Keldim" joylashuvi, haq, sharhlar, brigada, taklif, hisobot va Mini App ---
+const HERE = { lat: 41.311081, lng: 69.240562 };
+const north = (m: number) => ({ lat: Math.round((HERE.lat + m / 111_195) * 1e6) / 1e6, lng: HERE.lng });
+const gbChat = await tgReg('gb', { role: 'business', phone: '901120001', name: 'Gulshan', org: 'Gulshan kafe', password: 'secret1' });
+const gbId = (await call('gb', '/me')).data.id;
+const later = { ...shift, date: tomorrow, start: '10:00', end: '12:00' };
+assert.equal(await status('gb', '/shifts', { ...later, lat: 55.75, lng: 37.61 }), 400, 'O‘zbekistondan tashqari joy yo‘q');
+assert.equal(await status('gb', '/shifts', { ...later, lat: 'abc', lng: 69 }), 400, 'noto‘g‘ri koordinata');
+const mapped = (await call('gb', '/shifts', { ...later, title: 'Barista', ...HERE })).data.id;
+assert.deepEqual([(await call('gb', '/me')).data.lat, (await call('gb', '/me')).data.lng], [HERE.lat, HERE.lng], 'biznesning oxirgi joyi saqlanadi');
+const far = (await call('gb', '/shifts', { ...later, start: '11:00', title: 'Barista', ...north(5000) })).data.id;
+const byNear = (await call('guest', `/shifts?near=${north(4900).lat},${HERE.lng}`)).data;
+assert.equal(byNear[0].id, far, 'yaqinimdagilar: eng yaqini birinchi');
+assert.ok(Math.abs(byNear[0].distance - 100) <= 2, 'masofa metrda');
+assert.ok(byNear.find((x: any) => x.id === mapped).distance > 4800);
+assert.equal(byNear.at(-1).distance, null, 'joyi belgilanmaganlar oxirida');
+assert.ok((await call('guest', `/shifts?org=${gbId}`)).data.every((x: any) => x.business_id === gbId), 'bitta biznesning smenalari');
+
+// Smena bajarildi: yozma sharh, "Haqimni oldim" tugmalari, haqni o'z vaqtida to'lash foizi
+const gwChat = await tgReg('gw', { role: 'worker', phone: '931120001', name: 'Shahzod', password: 'secret1' });
+const gw2Chat = await tgReg('gw2', { role: 'worker', phone: '931120002', name: 'Zarina', password: 'secret1' });
+const gwId = (await call('gw', '/me')).data.id;
+const doneShift = async (who: string, review?: string) => {
+  const id = (await call('gb', '/shifts', { ...shift, title: 'Kassir' })).data.id;
+  assert.equal(await status(who, `/shifts/${id}/apply`, {}), 200);
+  const app = (await call('gb', `/shifts/${id}`)).data.applicants[0];
+  assert.equal(await status('gb', `/applications/${app.id}`, { action: 'accept' }), 200);
+  assert.equal(await status('gb', `/applications/${app.id}`, { action: 'came', rating: 5, review }), 200);
+  return { shiftId: id, appId: app.id };
+};
+const job = await doneShift('gw', '  Juda   tirishqoq, vaqtida keldi ');
+assert.equal(tgTo(gwChat).at(-1).reply_markup.inline_keyboard[0][0].callback_data, `p:${job.appId}:y`, '“Haqimni oldim” tugmasi');
+await cb(gbChat, `p:${job.appId}:y`);
+assert.equal((await call('gw', '/my/applications')).data.find((a: any) => a.id === job.appId).paid, null, 'begona chat haqni belgilay olmaydi');
+await cb(gwChat, `p:${job.appId}:n`);
+assert.match(lastTo(gbChat), /Shahzod Testov .* haqini hali olmaganini aytdi/, 'biznesga ogohlantirish');
+assert.equal(await status('gw', `/applications/${job.appId}/paid`, { got: false }), 409, 'ikki marta “olmadim” yo‘q');
+assert.equal((await call('gw', `/applications/${job.appId}/paid`, { got: true })).data.paid, 'late', '“olmadim” dan keyin — kechikib');
+assert.match(lastTo(gbChat), /haqini olganini tasdiqladi/);
+assert.equal(await status('gw', `/applications/${job.appId}/paid`, { got: true }), 409);
+assert.equal(await status('gw', `/applications/${job.appId}/rate`, { rating: 4, review: '  Yaxshi   jamoa ' }), 200);
+const org = (await call('guest', `/orgs/${gbId}`)).data;
+assert.equal(org.org.paid_pct, 0, 'kechikkan to‘lov o‘z vaqtida hisoblanmaydi');
+assert.deepEqual(org.reviews.map((r: any) => [r.rating, r.text, r.author]), [[4, 'Yaxshi jamoa', 'Shahzod T.']], 'sharh va qisqartirilgan ism');
+assert.equal(await status('guest', `/orgs/${gwId}`), 404, 'ishchi biznes sahifasi emas');
+
+// Shoshilinch: faqat bugun/ertaga, takrorsiz; ro'yxatda tepada; xabar — yaqindagi ishonchli ishchiga (yangi ishchiga emas)
+const in3 = new Date(Date.now() + 3 * 864e5).toLocaleDateString('en-CA', { timeZone: 'Asia/Tashkent' });
+assert.equal(await status('gb', '/shifts', { ...later, date: in3, urgent: true }), 400, 'shoshilinch — faqat bugun yoki ertaga');
+assert.equal(await status('gb', '/shifts', { ...later, urgent: true, repeat: 'daily', times: 2 }), 400, 'shoshilinch takrorlanmaydi');
+assert.deepEqual((await call('gw', '/me/location', north(300))).data, north(300));
+const gw2Before = tgTo(gw2Chat).length;
+const urgent = (await call('gb', '/shifts', { ...later, start: '08:00', title: 'Oshpaz', urgent: true, ...HERE })).data;
+assert.equal(urgent.alerted, 1, 'faqat ishonchli va yaqin ishchiga');
+assert.match(lastTo(gwChat), /Shoshilinch smena, sizdan \d+ m uzoqlikda/);
+assert.equal(tgTo(gw2Chat).length, gw2Before, 'hali smena bajarmagan ishchiga xabar yo‘q');
+assert.equal((await call('guest', '/shifts')).data[0].id, urgent.id, 'shoshilinch smena ro‘yxat tepasida');
+assert.ok((await call('guest', '/shifts?urgent=1')).data.every((x: any) => x.urgent === 1));
+assert.deepEqual((await call('gw', '/me/location', { clear: true })).data, { lat: null, lng: null });
+
+// "Keldim": smena joyi belgilangan bo'lsa, joylashuv shart va 300 m ichida
+if (tNow.getUTCHours() < 22) {
+  const here = (await call('gb', '/shifts', { ...shift, start: hhmm(new Date(tNow.getTime() + 40 * 60_000)), title: 'Ofitsiant', ...HERE })).data.id;
+  assert.equal(await status('gw', `/shifts/${here}/apply`, {}), 200);
+  const app = (await call('gb', `/shifts/${here}`)).data.applicants[0];
+  assert.equal(await status('gb', `/applications/${app.id}`, { action: 'accept' }), 200);
+  assert.equal(await status('gw', `/applications/${app.id}/checkin`, {}), 400, 'joylashuvsiz “Keldim” yo‘q');
+  const tooFar = await call('gw', `/applications/${app.id}/checkin`, north(2000));
+  assert.equal(tooFar.status, 409);
+  assert.match(tooFar.data.error, /smena joyidan 2,0 km uzoqdasiz/);
+  const arrived = (await call('gw', `/applications/${app.id}/checkin`, north(120))).data;
+  assert.ok(Math.abs(arrived.checkin_dist - 120) <= 2, 'masofa saqlanadi');
+  assert.match(lastTo(gbChat), /smena joyidan 12\d m/, 'biznesga masofa bilan');
+  assert.equal((await call('gb', `/shifts/${here}`)).data.applicants[0].checkin_dist, arrived.checkin_dist);
+}
+
+// Brigada: taklif (Telegram tugmasi yoki ilova), boshliq hamma nomidan ariza beradi, biznes bir bosishda qabul qiladi
+const gw3Chat = await tgReg('gw3', { role: 'worker', phone: '931120003', name: 'Bekzod', password: 'secret1' });
+assert.equal(await status('gw', '/brigade/invite', { phone: '931120002' }), 404, 'avval brigada tuziladi');
+const team = (await call('gw', '/brigade', { name: 'Tezkor jamoa' })).data;
+assert.equal(team.brigade.mine, true);
+assert.equal(await status('gw', '/brigade', { name: 'Ikkinchi' }), 409, 'bitta brigada');
+assert.equal(await status('gw', '/brigade/invite', { phone: '931120099' }), 404, 'ro‘yxatda yo‘q raqam');
+assert.equal(await status('gw', '/brigade/invite', { phone: '901120001' }), 404, 'biznes brigadaga qo‘shilmaydi');
+assert.equal(await status('gw', '/brigade/invite', { phone: '931120001' }), 400, 'o‘zini taklif qilmaydi');
+await call('gw', '/brigade/invite', { phone: '931120002' });
+assert.equal(await status('gw', '/brigade/invite', { phone: '931120002' }), 409, 'ikki marta taklif yo‘q');
+const invite = tgTo(gw2Chat).at(-1);
+assert.match(invite.text, /Tezkor jamoa/);
+await cb(gw2Chat, invite.reply_markup.inline_keyboard[0][0].callback_data);
+await call('gw', '/brigade/invite', { phone: '931120003' });
+assert.equal((await call('gw3', '/brigade')).data.invites[0].name, 'Tezkor jamoa', 'ilovada taklif ko‘rinadi');
+assert.equal((await call('gw3', '/brigade/answer', { id: team.brigade.id, accept: true })).data.brigade.members.length, 3);
+assert.match(lastTo(gwChat), /Bekzod Testov .*brigadangizga qo‘shildi/);
+const small = (await call('gb', '/shifts', { ...later, start: '14:00', title: 'Yuk tashuvchi', slots: 2 })).data.id;
+assert.equal(await status('gw', `/shifts/${small}/apply`, { brigade: true }), 409, '3 kishiga 2 joy yetmaydi');
+const big = (await call('gb', '/shifts', { ...later, start: '15:00', title: 'Yuk tashuvchi', slots: 3 })).data.id;
+assert.equal(await status('gw2', `/shifts/${big}/apply`, { brigade: true }), 403, 'faqat boshliq brigada nomidan');
+assert.equal((await call('gw', `/shifts/${big}/apply`, { brigade: true })).data.team, 3);
+assert.match(lastTo(gbChat), /Yangi brigada arizasi: “Tezkor jamoa”, 3 kishi/);
+assert.match(lastTo(gw3Chat), /brigadasi nomidan smenaga ariza berdi/);
+const crew = (await call('gb', `/shifts/${big}`)).data.applicants;
+assert.deepEqual(crew.map((a: any) => a.brigade_name), ['Tezkor jamoa', 'Tezkor jamoa', 'Tezkor jamoa']);
+assert.equal((await call('gb', `/applications/${crew[1].id}`, { action: 'accept_team' })).data.accepted, 3);
+assert.equal((await call('gb', `/shifts/${big}`)).data.shift.taken, 3, 'hammasi qabul qilindi');
+assert.match(lastTo(gw2Chat), /qabul qilindi/);
+assert.equal(await status('gb', `/applications/${crew[0].id}`, { action: 'accept_team' }), 409, 'ikki marta yo‘q');
+assert.equal(await status('gw', `/brigade/members/${gwId}/remove`, {}), 400);
+await call('gw3', '/brigade/leave', {});
+assert.match(lastTo(gwChat), /Bekzod Testov .*brigadangizdan chiqdi/);
+await call('gw', '/brigade/leave', {});
+assert.match(lastTo(gw2Chat), /brigadasi tarqatildi/);
+assert.equal((await call('gw2', '/brigade')).data.brigade, null);
+
+// Taklif: do'st ro'yxatdan o'tadi, birinchi smenasini bajaradi — taklif qilganga 1 hafta Pro (bir marta)
+const code = (await call('gw', '/me')).data.ref_code;
+const rfChat = await tgReg('rf', { role: 'worker', phone: '931120009', name: 'Rustam', password: 'secret1', ref: code });
+await tgReg('rf2', { role: 'worker', phone: '931120010', name: 'Nomalum', password: 'secret1', ref: 'zzzzzz' });
+assert.deepEqual((await call('gw', '/me')).data.referrals, { invited: 1, rewarded: 0 }, 'noto‘g‘ri kod hisoblanmaydi');
+const rfJob = await doneShift('rf');
+const week = new Date(Date.parse(`${today}T00:00:00Z`) + 7 * 864e5).toISOString().slice(0, 10);
+const gwMe = (await call('gw', '/me')).data;
+assert.deepEqual([gwMe.plan, gwMe.plan_until, gwMe.referrals.rewarded], ['pro', week, 1], 'taklif qilganga 1 hafta Pro');
+assert.match(lastTo(gwChat), /1 hafta Pro sovg‘a qilindi/);
+await doneShift('rf');
+assert.equal((await call('gw', '/me')).data.plan_until, week, 'sovg‘a bir marta');
+assert.equal((await call('rf', `/applications/${rfJob.appId}/paid`, { got: true })).data.paid, 'yes', 'smena kuni olingan haq — o‘z vaqtida');
+assert.equal((await call('guest', `/orgs/${gbId}`)).data.org.paid_pct, 50, '1 ta o‘z vaqtida, 1 ta kechikib');
+assert.equal((await call('guest', `/shifts?org=${gbId}`)).data[0].org_paid, 50, 'ro‘yxatda ham');
+assert.ok(rfChat);
+
+// Bizneslar ishchi haqida yozgan sharhlar arizachilar ro'yxatida ko'rinadi
+const again = (await call('gb', '/shifts', { ...later, start: '16:00', title: 'Kassir' })).data.id;
+await call('gw', `/shifts/${again}/apply`, {});
+assert.deepEqual((await call('gb', `/shifts/${again}`)).data.applicants[0].reviews.map((r: any) => [r.rating, r.text]), [[5, 'Juda tirishqoq, vaqtida keldi']]);
+
+// Oylik hisobot: ishchiga topgani, ulush va qo'liga tushgani; biznesga to'lagani
+const month = today.slice(0, 7);
+const rep = (await call('gw', '/me/report')).data.months.find((m: any) => m.month === month);
+assert.deepEqual([rep.shifts, rep.gross, rep.share, rep.net], [1, 250000, 37500, 212500]);
+assert.equal((await call('gb', '/me/report')).data.total.gross, 750000, 'biznes: 3 ta bajarilgan smena');
+assert.equal(await status('guest', '/me/report'), 401);
+
+// Telegram Mini App: imzo bot tokeni bilan tekshiriladi, bog'langan raqam orqali parolsiz kiriladi
+const tgInit = (user: object, authDate = Math.floor(Date.now() / 1000), token = '123:test') => {
+  const data = new URLSearchParams({ query_id: 'AAHtest', user: JSON.stringify(user), auth_date: String(authDate) });
+  const check = [...data.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join('\n');
+  data.set('hash', crypto.createHmac('sha256', crypto.createHmac('sha256', 'WebAppData').update(token).digest()).update(check).digest('hex'));
+  return data.toString();
+};
+const viaApp = await call('mini', '/telegram/app', { initData: tgInit({ id: gwChat, first_name: 'Shahzod' }) });
+assert.equal(viaApp.data.name, 'Shahzod Testov', 'Mini App: avtomatik kirish');
+assert.equal((await call('mini', '/me')).data.id, gwId, 'sessiya ochildi');
+assert.equal(await status('mini2', '/telegram/app', { initData: tgInit({ id: gwChat }).replace('Shahzod', 'x') + '&x=1' }), 401, 'o‘zgartirilgan ma’lumot');
+assert.equal(await status('mini2', '/telegram/app', { initData: tgInit({ id: gwChat }, Math.floor(Date.now() / 1000) - 2 * 86400) }), 401, 'eskirgan');
+assert.equal(await status('mini2', '/telegram/app', { initData: tgInit({ id: gwChat }, undefined, '999:boshqa') }), 401, 'boshqa bot imzosi');
+assert.deepEqual((await call('mini2', '/telegram/app', { initData: tgInit({ id: 424242 }) })).data, { linked: false, bot: 'smenauzbbot' }, 'raqam bog‘lanmagan');
+const loneChat = await linkTg('931120077');
+assert.deepEqual((await call('mini2', '/telegram/app', { initData: tgInit({ id: loneChat }) })).data, { linked: true, registered: false, phone: '+998931120077' });
+assert.match(tgSent.at(-1).reply_markup.inline_keyboard[0][0].web_app.url, /^https:\/\/.+\/ilova\/smenalar$/, 'raqam bog‘langach ilova tugmasi');
+await tg({ message: { chat: { id: gwChat, type: 'private' }, from: { id: gwChat }, text: '/start' } });
+assert.match(tgSent.at(-1).text, /Raqamingiz bog‘langan: \+998 93 112 00 01/);
+assert.ok(tgSent.at(-1).reply_markup.inline_keyboard[0][0].web_app, '/start: “Smena’ni ochish” tugmasi');
+await handle({ method: 'POST', path: '/api/admin/telegram', cookie: jar.adm2, contentType: 'application/json', body: '{"action":"connect"}', https: true, origin: 'https://smena.test' });
+assert.equal(tgSent.findLast((m) => m.method === 'setChatMenuButton')?.menu_button.web_app.url, 'https://smena.test/ilova/smenalar', 'menyu tugmasi ilovani ochadi');
 
 tgFake.close();
 console.log('Hammasi joyida ✓');

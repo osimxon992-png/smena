@@ -8,7 +8,7 @@ import AuthAside from '@/components/app/AuthAside';
 import { GoogleButton, GoogleSignupForm, type GoogleSignup } from '@/components/app/google';
 import { Field, PhoneInput, ProfileFields, useSubmit } from '@/components/app/parts';
 import { BotHint, CodeForm, ErrorText, useCodeStep } from '@/components/app/sms';
-import { api, type Me } from '@/lib/client';
+import { api, savedRef, type Me } from '@/lib/client';
 import { useT } from '@/components/Lang';
 
 export default function RegisterForm({ business }: { business: boolean }) {
@@ -26,7 +26,7 @@ export default function RegisterForm({ business }: { business: boolean }) {
     sms.start({
       phone,
       finish: async (code) => {
-        const user = await api<Me>('/register', { ...body, code });
+        const user = await api<Me>('/register', { ...body, code, ref: savedRef() });
         setMe(user);
         router.push(home(user));
       },

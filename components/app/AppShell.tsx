@@ -6,7 +6,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import InstallButton from '@/components/InstallButton';
 import Farbo from '@/components/Farbo';
 import { LangSwitch, useT } from '@/components/Lang';
-import { api, type Me } from '@/lib/client';
+import { api, rememberRef, type Me } from '@/lib/client';
 import Avatar from './Avatar';
 
 type AppCtx = {
@@ -45,6 +45,19 @@ export function useLoad<T>(path: string | null) {
   return { data, error, reload };
 }
 
+// Telegram Mini App: bot ichida ochilganda Telegram manzil oxiriga (#tgWebAppData=...) imzolangan ma'lumot qo'shadi.
+// Sahifa almashganda manzildan yo'qoladi, shuning uchun sessiya davomida sessionStorage'da turadi
+function telegramInitData() {
+  try {
+    const fresh = new URLSearchParams(location.hash.slice(1)).get('tgWebAppData');
+    if (fresh) sessionStorage.setItem('tg-init', fresh);
+    return fresh || sessionStorage.getItem('tg-init') || '';
+  } catch {
+    return '';
+  }
+}
+type TgApp = Me | { linked: boolean; registered?: boolean; phone?: string };
+
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
   const [ready, setReady] = useState(false);
@@ -56,6 +69,36 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const refreshMe = useCallback(() => api<Me | null>('/me').then(setMe).catch(() => {}), []);
   useEffect(() => { refreshMe().finally(() => setReady(true)); }, [path, refreshMe]);
+  // Taklif havolasi (?ref=) ro'yxatgacha eslab qolinadi; Telegram ma'lumoti sahifa birinchi ochilganda olinadi
+  const tgInit = useRef<string | null>(null);
+  const [tgNote, setTgNote] = useState('');
+  useEffect(() => { rememberRef(); tgInit.current = telegramInitData(); }, []);
+  // Bot ichida: Telegram oynasini to'liq ochamiz va kirmagan bo'lsa, bog'langan raqam orqali parolsiz kiritamiz
+  const tgTried = useRef(false);
+  useEffect(() => {
+    const init = tgInit.current;
+    if (!ready || !init || tgTried.current) return;
+    tgTried.current = true;
+    const script = Object.assign(document.createElement('script'), { src: 'https://telegram.org/js/telegram-web-app.js', async: true });
+    script.onload = () => {
+      const app = (window as { Telegram?: { WebApp?: { ready: () => void; expand: () => void } } }).Telegram?.WebApp;
+      app?.ready();
+      app?.expand();
+    };
+    document.head.append(script);
+    if (me) return;
+    api<TgApp>('/telegram/app', { initData: init }).then((r) => {
+      if ('id' in r) {
+        setMe(r);
+        if (['/ilova/smenalar', '/ilova/kirish', '/ilova/royxat'].includes(location.pathname)) router.replace(home(r));
+      } else if (!r.linked) {
+        setTgNote(t('Raqamingiz botga bog‘lanmagan. Botga qaytib, “📱 Raqamni yuborish” tugmasini bosing — keyin Smena’ga o‘zi kirasiz.'));
+      } else {
+        setTgNote(t('Raqamingiz botga bog‘langan, lekin Smena’da hisobingiz yo‘q. Ro‘yxatdan o‘ting: kod shu Telegram chatiga keladi.'));
+        router.push('/ilova/royxat');
+      }
+    }).catch((e: Error) => setTgNote(e.message));
+  }, [ready, me, router, t]);
   // Ro'yxatdan o'tgandan keyin profil to'ldirilmaguncha ilovaning boshqa sahifalari ochilmaydi
   useEffect(() => { if (me && !me.complete && path !== '/ilova/profil') router.replace('/ilova/profil'); }, [me, path, router]);
 
@@ -95,6 +138,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <LangSwitch />
             </nav>
           </header>
+          {tgNote && !me && <p className="banner tg-note">{tgNote}</p>}
           <main id="asosiy">{children}</main>
         </div>
         <Farbo />

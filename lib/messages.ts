@@ -146,6 +146,71 @@ export const SERVER_DICT: Dict = {
   '✅ {worker} kelishini tasdiqladi: {shift}': ['✅ {worker} подтвердил(а), что придёт: {shift}', '✅ {worker} confirmed they will come: {shift}'],
   '⚠️ {worker} bugun kela olmasligini aytdi: {shift}\n\nIlovada uni ozod qilib, o‘rniga boshqa ishchi qabul qilishingiz mumkin: {link}': ['⚠️ {worker} сообщил(а), что сегодня не сможет прийти: {shift}\n\nВ приложении можно освободить его/её и принять другого работника: {link}', '⚠️ {worker} said they cannot come today: {shift}\n\nIn the app you can release them and accept another worker: {link}'],
   'Ish beruvchi sizni smenadan ozod qildi: {shift}. Hisobingiz bloklanmaydi.': ['Работодатель освободил вас от смены: {shift}. Аккаунт не будет заблокирован.', 'The employer released you from the shift: {shift}. Your account will not be blocked.'],
+  'Xatolik yuz berdi': ['Произошла ошибка', 'Something went wrong'],
+
+  // --- Joylashuv, "Keldim", shoshilinch smenalar ---
+  'Joylashuv noto‘g‘ri': ['Неверное местоположение', 'Invalid location'],
+  'Xaritada O‘zbekiston ichidagi joyni tanlang': ['Выберите на карте место в Узбекистане', 'Pick a place in Uzbekistan on the map'],
+  'Shoshilinch smenani takrorlab bo‘lmaydi': ['Срочную смену нельзя повторять', 'An urgent shift cannot repeat'],
+  'Shoshilinch smena faqat bugun yoki ertaga uchun bo‘ladi': ['Срочная смена может быть только на сегодня или завтра', 'An urgent shift can only be for today or tomorrow'],
+  'Joylashuvingizni aniqlab bo‘lmadi. Telefonda joylashuvni yoqing, brauzerga ruxsat bering va qayta bosing': ['Не удалось определить ваше местоположение. Включите геолокацию на телефоне, разрешите её браузеру и нажмите снова', 'Could not get your location. Turn on location on your phone, allow it for the browser and tap again'],
+  'Siz smena joyidan {dist} uzoqdasiz. “Keldim” ni joyiga yetib kelgach bosing ({max} m ichida)': ['Вы в {dist} от места смены. Нажмите «Я на месте», когда придёте (в пределах {max} м)', 'You are {dist} away from the shift location. Tap “I’m here” once you arrive (within {max} m)'],
+  '📍 {worker} joyiga keldi ({time}, smena joyidan {dist}): {shift}': ['📍 {worker} на месте ({time}, {dist} от места смены): {shift}', '📍 {worker} has arrived ({time}, {dist} from the shift location): {shift}'],
+  '🔥 Shoshilinch smena, sizdan {dist} uzoqlikda:\n{shift}\n📍 {place}\n💰 {pay}\n\nAriza berish: {link}': ['🔥 Срочная смена в {dist} от вас:\n{shift}\n📍 {place}\n💰 {pay}\n\nПодать заявку: {link}', '🔥 Urgent shift {dist} from you:\n{shift}\n📍 {place}\n💰 {pay}\n\nApply: {link}'],
+  '🔥 Shoshilinch smena tumaningizda:\n{shift}\n📍 {place}\n💰 {pay}\n\nAriza berish: {link}': ['🔥 Срочная смена в вашем районе:\n{shift}\n📍 {place}\n💰 {pay}\n\nПодать заявку: {link}', '🔥 Urgent shift in your district:\n{shift}\n📍 {place}\n💰 {pay}\n\nApply: {link}'],
+
+  // --- Telegram Mini App ---
+  'Telegram ma’lumoti tasdiqlanmadi. Smena’ni bot orqali qayta oching': ['Данные Telegram не подтверждены. Откройте Smena заново через бота', 'Telegram data could not be verified. Open Smena again from the bot'],
+  'Telegram sessiyasi eskirgan. Smena’ni bot orqali qayta oching': ['Сессия Telegram устарела. Откройте Smena заново через бота', 'The Telegram session has expired. Open Smena again from the bot'],
+  '📲 Smena’ni ochish': ['📲 Открыть Smena', '📲 Open Smena'],
+  'Smena’ni shu yerning o‘zida ham ochishingiz mumkin: hisobingizga parolsiz kirasiz.': ['Smena можно открыть прямо здесь: вход в аккаунт без пароля.', 'You can also open Smena right here: you sign in without a password.'],
+  'Assalomu alaykum! Raqamingiz bog‘langan: {phone} ✅\n\nSmena’ni shu yerning o‘zida oching: hisobingizga parolsiz kirasiz. Kodlar, eslatmalar va xabarlar ham shu chatga keladi.': ['Здравствуйте! Ваш номер привязан: {phone} ✅\n\nОткройте Smena прямо здесь: вход без пароля. Коды, напоминания и уведомления тоже приходят в этот чат.', 'Hello! Your number is linked: {phone} ✅\n\nOpen Smena right here: you sign in without a password. Codes, reminders and notifications also come to this chat.'],
+
+  // --- Brigada ---
+  'Brigada nomi': ['Название бригады', 'Team name'],
+  'Brigada nomidan faqat brigada boshlig‘i ariza beradi': ['Подать заявку от имени бригады может только бригадир', 'Only the team leader can apply for the team'],
+  'Brigadangizda ariza bera oladigan a’zo yo‘q': ['В вашей бригаде нет участников, которые могут подать заявку', 'No one in your team can apply right now'],
+  'Smenada brigadangiz uchun joy yetmaydi: {free} ta bo‘sh joy bor, sizlar {n} kishisiz': ['На смене не хватает мест для бригады: свободно {free}, а вас {n}', 'Not enough places for your team: {free} free, and you are {n}'],
+  'Smenada brigada uchun joy yetmaydi': ['На смене не хватает мест для бригады', 'Not enough places on this shift for the team'],
+  'Siz allaqachon brigadadasiz. Yangisini tuzish uchun avval undan chiqing': ['Вы уже в бригаде. Чтобы создать новую, сначала выйдите из неё', 'You are already in a team. Leave it first to create a new one'],
+  'Avval brigada tuzing': ['Сначала создайте бригаду', 'Create a team first'],
+  'Bu raqam bilan ishchi ro‘yxatdan o‘tmagan': ['Работник с этим номером не зарегистрирован', 'No worker is registered with this number'],
+  'O‘zingizni taklif qila olmaysiz': ['Нельзя пригласить самого себя', 'You cannot invite yourself'],
+  'Brigadada ko‘pi bilan {n} kishi bo‘ladi': ['В бригаде может быть не больше {n} человек', 'A team can have at most {n} people'],
+  'Bu ishchi boshqa brigadada': ['Этот работник уже в другой бригаде', 'This worker is already in another team'],
+  'Bu ishchi taklif qilingan': ['Этот работник уже приглашён', 'This worker has already been invited'],
+  'Taklif topilmadi': ['Приглашение не найдено', 'Invitation not found'],
+  'Siz allaqachon brigadadasiz. Avval undan chiqing': ['Вы уже в бригаде. Сначала выйдите из неё', 'You are already in a team. Leave it first'],
+  'Siz brigadada emassiz': ['Вы не состоите в бригаде', 'You are not in a team'],
+  'Brigadani tarqatish uchun “Brigadadan chiqish” ni bosing': ['Чтобы распустить бригаду, нажмите «Выйти из бригады»', 'To disband the team, tap “Leave the team”'],
+  '👥 {leader} “{brigade}” brigadasi nomidan smenaga ariza berdi:\n{shift}\n📍 {place}\n💰 {pay}\n\nKela olmasangiz, arizani bekor qiling: {link}': ['👥 {leader} подал(а) заявку на смену от имени бригады «{brigade}»:\n{shift}\n📍 {place}\n💰 {pay}\n\nЕсли не сможете прийти, отмените заявку: {link}', '👥 {leader} applied to a shift for the “{brigade}” team:\n{shift}\n📍 {place}\n💰 {pay}\n\nIf you can’t come, cancel your application: {link}'],
+  '👥 Yangi brigada arizasi: “{brigade}”, {n} kishi (boshlig‘i {worker})\n{shift}\n\nArizalarni ko‘rish: {link}': ['👥 Новая заявка бригады «{brigade}», {n} чел. (бригадир {worker})\n{shift}\n\nСмотреть заявки: {link}', '👥 New team application: “{brigade}”, {n} people (led by {worker})\n{shift}\n\nSee applications: {link}'],
+  '👥 {leader} sizni “{name}” brigadasiga taklif qilmoqda.\n\nQo‘shilsangiz, boshliq sizni ham smenalarga brigada bilan yozadi (kela olmasangiz, arizani o‘zingiz bekor qilasiz).\n\nIlovada: {link}': ['👥 {leader} приглашает вас в бригаду «{name}».\n\nЕсли вступите, бригадир будет записывать вас на смены вместе с бригадой (если не сможете прийти, отмените заявку сами).\n\nВ приложении: {link}', '👥 {leader} invites you to the “{name}” team.\n\nIf you join, the leader will sign you up for shifts with the team (if you can’t come, cancel the application yourself).\n\nIn the app: {link}'],
+  '✅ Qo‘shilaman': ['✅ Вступаю', '✅ Join'],
+  '❌ Yo‘q': ['❌ Нет', '❌ No'],
+  '👥 Siz “{name}” brigadasiga qo‘shildingiz.': ['👥 Вы вступили в бригаду «{name}».', '👥 You joined the “{name}” team.'],
+  'Taklif rad etildi.': ['Приглашение отклонено.', 'Invitation declined.'],
+  '👥 {worker} “{name}” brigadangizga qo‘shildi.': ['👥 {worker} вступил(а) в вашу бригаду «{name}».', '👥 {worker} joined your “{name}” team.'],
+  '👥 “{name}” brigadasi tarqatildi.': ['👥 Бригада «{name}» распущена.', '👥 The “{name}” team was disbanded.'],
+  '👥 {worker} “{name}” brigadangizdan chiqdi.': ['👥 {worker} вышел(а) из вашей бригады «{name}».', '👥 {worker} left your “{name}” team.'],
+
+  // --- Haqimni oldim ---
+  'Haqingizni oldingizmi?': ['Вы получили оплату?', 'Did you get paid?'],
+  '💸 Haqimni oldim': ['💸 Оплату получил(а)', '💸 I got paid'],
+  '⏳ Hali olmadim': ['⏳ Ещё не получил(а)', '⏳ Not yet'],
+  'Haqni faqat bajarilgan smena uchun belgilash mumkin': ['Отметить оплату можно только за выполненную смену', 'You can only mark pay for a completed shift'],
+  'Haqingizni olganingiz belgilangan': ['Вы уже отметили, что получили оплату', 'You already marked that you got paid'],
+  '⏳ Ish beruvchiga xabar berdik. Haqingizni olgach, “💸 Haqimni oldim” ni bosing.': ['⏳ Мы сообщили работодателю. Когда получите оплату, нажмите «💸 Оплату получил(а)».', '⏳ We let the employer know. Once you get paid, tap “💸 I got paid”.'],
+  '💸 Rahmat! Haqingizni olganingiz belgilandi.': ['💸 Спасибо! Отмечено, что вы получили оплату.', '💸 Thanks! Marked that you got paid.'],
+  '💸 {worker} haqini olganini tasdiqladi: {shift}': ['💸 {worker} подтвердил(а), что получил(а) оплату: {shift}', '💸 {worker} confirmed they got paid: {shift}'],
+  '⚠️ {worker} {shift} smenasi uchun haqini hali olmaganini aytdi. Iltimos, to‘lovni tekshiring: ishchilar haqni o‘z vaqtida to‘laydigan bizneslarni tanlaydi.': ['⚠️ {worker} сообщил(а), что ещё не получил(а) оплату за смену {shift}. Пожалуйста, проверьте оплату: работники выбирают бизнесы, которые платят вовремя.', '⚠️ {worker} says they have not been paid yet for {shift}. Please check the payment: workers choose businesses that pay on time.'],
+
+  // --- Taklif (referral) va hisobot ---
+  '🎁 Siz taklif qilgan {name} birinchi smenasini bajardi! Sizga 1 hafta Pro sovg‘a qilindi: {until} gacha.': ['🎁 Приглашённый вами {name} выполнил(а) первую смену! Вам подарена неделя Pro: до {until}.', '🎁 {name}, whom you invited, completed their first shift! You get 1 week of Pro: until {until}.'],
+  '🎁 Siz taklif qilgan {name} birinchi smenasini bajardi! Rahmat — Pro obunangiz muddatsiz.': ['🎁 Приглашённый вами {name} выполнил(а) первую смену! Спасибо — ваша подписка Pro бессрочная.', '🎁 {name}, whom you invited, completed their first shift! Thank you — your Pro plan has no end date.'],
+  '📊 {month} hisobotingiz:\nSmenalar: {n} ta, {hours} soat\nTopganingiz: {gross}\nSmena ulushi (15%): {share}\nQo‘lingizga: {net}\n\nBatafsil: {link}': ['📊 Ваш отчёт за {month}:\nСмен: {n}, {hours} ч\nЗаработано: {gross}\nДоля Smena (15%): {share}\nНа руки: {net}\n\nПодробнее: {link}', '📊 Your report for {month}:\nShifts: {n}, {hours} h\nEarned: {gross}\nSmena share (15%): {share}\nTake-home: {net}\n\nDetails: {link}'],
+  '📊 {month} hisobotingiz:\nBajarilgan smenalar: {n} ta, {hours} soat\nIshchilarga to‘langan: {gross}\n\nBatafsil: {link}': ['📊 Ваш отчёт за {month}:\nВыполнено смен: {n}, {hours} ч\nВыплачено работникам: {gross}\n\nПодробнее: {link}', '📊 Your report for {month}:\nCompleted shifts: {n}, {hours} h\nPaid to workers: {gross}\n\nDetails: {link}'],
+  'Biznes topilmadi': ['Бизнес не найден', 'Business not found'],
 };
 
 // Xato matnini so'rovchining tiliga o'giradi. Tarjimasi yo'q bo'lsa (admin xatolari kabi) o'zbekcha qoladi
