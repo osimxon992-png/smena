@@ -6,3 +6,8 @@ smena.db*
 .impeccable/questions/
 .env
 .env*.local
+
+# Tayyor videolar katta (har biri 12–23 MB): video/ dagi skriptlar bilan qayta yasaladi
+video/*.mp4
+video/kadrlar/
+__pycache__/

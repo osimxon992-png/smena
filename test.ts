@@ -608,7 +608,8 @@ if (tNow.getUTCHours() < 22) {
   for (const who of ['nw', 'nw2']) assert.equal(await status(who, `/shifts/${soon}/apply`, {}), 200);
   for (const a of (await call('nb', `/shifts/${soon}`)).data.applicants) assert.equal(await status('nb', `/applications/${a.id}`, { action: 'accept' }), 200);
   const [a1, a2] = (await call('nb', `/shifts/${soon}`)).data.applicants;
-  assert.equal((await call('guest', '/cron/reminders')).data.sent, 2, '3 soat ichidagi smena: ikkalasiga eslatma');
+  // Soat 18:00 dan keyin ertangi qabul qilingan smenaga ham (Madina, "Kassir") kun oldingi eslatma ketadi
+  assert.equal((await call('guest', '/cron/reminders')).data.sent, tNow.getUTCHours() >= 18 ? 3 : 2, '3 soat ichidagi smena: ikkalasiga eslatma');
   assert.equal((await call('guest', '/cron/reminders')).data.skipped, true, 'daqiqada bir martadan ko‘p ishlamaydi');
   const reminder = tgTo(wChat).at(-1);
   assert.match(reminder.text, /Eslatma/);
