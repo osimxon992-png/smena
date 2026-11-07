@@ -1569,6 +1569,27 @@ function months(rows: Row[]) {
   return [...out.values()].map((m): Row => ({ ...m, hours: Math.round(m.hours * 10) / 10, share: Math.round(m.gross * SHARE), net: m.gross - Math.round(m.gross * SHARE) }));
 }
 
+
+
+
+async function biznesStats({ user }: Ctx) {
+  need(user);
+  if (user.role !== "business") fail(403, "Faqat biznes uchun");
+  const overview = await one(
+    "SELECT COUNT(s.id) as total_shifts, " +
+    "COALESCE(SUM(s.pay * (SELECT COUNT(*) FROM applications a WHERE a.shift_id = s.id AND a.status = 'came')), 0) as total_spent, " +
+    "(SELECT COUNT(*) FROM applications a JOIN shifts s2 ON s2.id = a.shift_id WHERE s2.business_id = ? AND a.status = 'came') as total_workers, " +
+    "(SELECT COUNT(*) FROM applications a JOIN shifts s2 ON s2.id = a.shift_id WHERE s2.business_id = ? AND a.status = 'noshow') as noshows " +
+    "FROM shifts s WHERE s.business_id = ?", user.id, user.id, user.id
+  );
+  const topWorkers = await all(
+    "SELECT u.id, u.name, u.phone, COUNT(a.id) as count " +
+    "FROM applications a JOIN shifts s ON s.id = a.shift_id JOIN users u ON u.id = a.worker_id " +
+    "WHERE s.business_id = ? AND a.status = 'came' GROUP BY u.id ORDER BY count DESC LIMIT 5", user.id
+  );
+  return { overview, topWorkers };
+}
+
 async function report({ user }: Ctx) {
   need(user);
   const list = months(await monthRows(user));
@@ -2222,6 +2243,7 @@ const routes: [string, RegExp, (ctx: Ctx) => unknown][] = [
   ['POST', /^\/api\/me\/photo$/, setPhoto],
   ['POST', /^\/api\/me\/location$/, setLocation],
   ['GET', /^\/api\/me\/report$/, report],
+  ['GET', /^\/api\/biznes\/stats$/, biznesStats],
   ['GET', /^\/api\/orgs\/(\d+)$/, orgPage],
   ['POST', /^\/api\/me\/password$/, changePassword],
   ['GET', /^\/api\/photos\/(\d+)$/, getPhoto],
